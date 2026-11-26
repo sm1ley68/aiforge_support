@@ -11,6 +11,7 @@ from .catalog import catalog_reply
 from .contracts import HandoffDetails, MessageView, TurnResult
 from .product_questions import product_question_reply
 from .store import ChatStore
+from .task_extraction import DEFAULT_TASK_MODEL, PolzaTaskExtractor
 from .task_search import task_reply
 
 logger = logging.getLogger(__name__)
@@ -36,12 +37,16 @@ def reply_from_env() -> Reply:
         return demo_reply
 
     index = Path(index_path)
+    key = (os.getenv("POLZA_API_KEY") or "").strip()
+    model = (os.getenv("POLZA_TASK_MODEL") or DEFAULT_TASK_MODEL).strip() or DEFAULT_TASK_MODEL
+    extractor = PolzaTaskExtractor(key, model) if key else None
 
     def reply(text: str, history: list[MessageView]) -> TurnResult:
         return (
             product_question_reply(index, text, history)
             or task_reply(index, text, history)
             or catalog_reply(index, text)
+            or (task_reply(index, text, history, extractor=extractor) if extractor else None)
             or demo_reply(text, history)
         )
 
