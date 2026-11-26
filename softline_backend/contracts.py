@@ -58,6 +58,12 @@ class ProductCard(BaseModel):
     snapshot_at: datetime
 
 
+class CatalogReference(BaseModel):
+    offer_id: str
+    sku: str | None = None
+    title: str
+
+
 class HandoffDetails(BaseModel):
     reason: Literal["customer_requested", "insufficient_evidence", "commercial_terms", "provider_unavailable"]
     summary: str
@@ -72,6 +78,7 @@ class TurnResult(BaseModel):
     products: list[ProductCard] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     handoff: HandoffDetails | None = None
+    catalog_selection: CatalogReference | None = None
 
     @model_validator(mode="after")
     def check_handoff(self):
@@ -94,6 +101,7 @@ class MessageView(BaseModel):
     turn_id: UUID
     role: Literal["user", "assistant"]
     text: str
+    catalog_references: list[CatalogReference] = Field(default_factory=list, exclude=True)
 
 
 class HandoffView(HandoffDetails):

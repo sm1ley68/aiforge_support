@@ -173,3 +173,47 @@ class ChatBackendTests(unittest.TestCase):
         self.assertIn("50", local["text"])
         budget = self.client.get(f"{self.path}/turns/{budget_id}", headers=self.headers).json()
         self.assertEqual((budget["status"], budget["outcome"], budget["products"]), ("succeeded", "clarify", []))
+
+    def test_fact_questions_use_selected_offer_and_current_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            index = Path(folder) / "catalog.sqlite3"
+            contents = (
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="demo" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                '<price>9000</price><currencyId>RUB</currencyId>'
+                '<param name="Срок лицензии">12 месяцев</param>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            feed.write_text(contents)
+            build_index(feed, index)
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                reply = reply_from_env()
+            self.submit("sku", "Артикул MAIL-12")
+            self.assertTrue(process_one(self.store, reply))
+
+            feed.write_text(contents.replace("9000", "8500"))
+            build_index(feed, index)
+            questions = [
+                ("price", "А сколько стоит?"),
+                ("missing-fact", "Какое развёртывание?"),
+                ("term", "Какой срок лицензии?"),
+            ]
+            turn_ids = [self.submit(key, question).json()["turn_id"] for key, question in questions]
+            for _ in turn_ids:
+                self.assertTrue(process_one(self.store, reply))
+
+        price, missing, term = [
+            self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+            for turn_id in turn_ids
+        ]
+        self.assertEqual(price["outcome"], "answer")
+        self.assertIn("8500 RUB", price["text"])
+        self.assertEqual(price["sources"][0]["url"], "https://example.com/mail")
+        self.assertEqual(missing["outcome"], "clarify")
+        self.assertEqual(term["outcome"], "answer")
+        self.assertIn("12 месяцев", term["text"])
+        self.assertNotIn("catalog_selection", price)
+        history = self.client.get(f"{self.path}/messages", headers=self.headers).json()
+        self.assertNotIn("catalog_references", history[-1])

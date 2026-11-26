@@ -296,12 +296,19 @@ def _open_catalog(index: Path):
     return closing(sqlite3.connect(uri, uri=True))
 
 
+def _offer_columns(db: sqlite3.Connection) -> str:
+    version = db.execute("PRAGMA user_version").fetchone()[0]
+    fields = OFFER_FIELDS
+    if version >= NAMED_SCHEMA_VERSION:
+        fields += ", edition, term, license_type"
+    if version >= TASK_SCHEMA_VERSION:
+        fields += ", deployment, user_limit, origin"
+    return fields
+
+
 def lookup_sku(index: Path, sku: str) -> list[Offer]:
     with _open_catalog(index) as db:
-        version = db.execute("PRAGMA user_version").fetchone()[0]
-        fields = OFFER_FIELDS
-        if version >= NAMED_SCHEMA_VERSION:
-            fields += ", edition, term, license_type"
+        fields = _offer_columns(db)
         rows = db.execute(
             f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE sku_key = ? LIMIT 2",
             (sku.strip().casefold(),),
@@ -309,7 +316,17 @@ def lookup_sku(index: Path, sku: str) -> list[Offer]:
         return [Offer(*row) for row in rows]
 
 
-def _product_card(offer: Offer, match_summary: str) -> ProductCard | None:
+def lookup_offer(index: Path, offer_id: str) -> Offer | None:
+    with _open_catalog(index) as db:
+        fields = _offer_columns(db)
+        row = db.execute(
+            f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE offer_id = ?",
+            (offer_id,),
+        ).fetchone()
+        return Offer(*row) if row is not None else None
+
+
+def product_card(offer: Offer, match_summary: str) -> ProductCard | None:
     try:
         url = HTTP_URL.validate_python(offer.url)
     except ValidationError:
@@ -373,7 +390,7 @@ def find_task_cards(
         for *fields, group_id in rows:
             if group_id and group_id in seen_groups:
                 continue
-            card = _product_card(Offer(*fields), "Найдено по терминам задачи в каталоге")
+            card = product_card(Offer(*fields), "Найдено по терминам задачи в каталоге")
             if card is None:
                 continue
             cards.append(card)
@@ -400,7 +417,7 @@ def _sku_reply(index: Path, sku: str) -> TurnResult:
     if len(matches) > 1:
         return TurnResult(outcome="clarify", text=f"Для артикула {sku} найдено несколько предложений. Уточните редакцию или срок лицензии.")
 
-    card = _product_card(matches[0], "Точное совпадение артикула в каталоге")
+    card = product_card(matches[0], "Точное совпадение артикула в каталоге")
     if card is None:
         return TurnResult(outcome="clarify", text=f"Для артикула {sku} в каталоге нет проверяемой ссылки. Могу передать вопрос менеджеру.")
     return _answer(f"Нашёл карточку по артикулу {card.sku}. Данные о цене и наличии относятся к снимку каталога.", [card])
@@ -425,7 +442,7 @@ def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
     cards = [
         card
         for row in rows[:COMPARISON_LIMIT]
-        if (card := _product_card(Offer(*row), "Предложение из найденного семейства")) is not None
+        if (card := product_card(Offer(*row), "Предложение из найденного семейства")) is not None
     ]
     if not cards:
         return TurnResult(outcome="clarify", text="У найденных предложений нет проверяемых ссылок. Могу передать вопрос менеджеру.")
@@ -473,7 +490,7 @@ def _named_product_reply(
             return None
     if len(rows) != 1:
         return TurnResult(outcome="clarify", text=f"Не удалось подтвердить одно предложение с названием «{name}». Укажите точную редакцию или артикул.")
-    card = _product_card(Offer(*rows[0]), "Точное совпадение названия в каталоге")
+    card = product_card(Offer(*rows[0]), "Точное совпадение названия в каталоге")
     if card is None:
         return TurnResult(outcome="clarify", text=f"Для «{name}» в каталоге нет проверяемой ссылки. Могу передать вопрос менеджеру.")
     return _answer(f"Нашёл «{card.title}» по точному названию в каталоге.", [card])

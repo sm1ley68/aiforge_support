@@ -8,7 +8,15 @@ from psycopg import connect
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .contracts import HandoffCase, HandoffView, MessageView, NewChat, TurnResult, TurnView
+from .contracts import (
+    CatalogReference,
+    HandoffCase,
+    HandoffView,
+    MessageView,
+    NewChat,
+    TurnResult,
+    TurnView,
+)
 
 
 HANDOFF_ROWS = """
@@ -96,6 +104,7 @@ class ChatStore:
             return None
         result = row.pop("result") or {}
         result.pop("handoff", None)
+        result.pop("catalog_selection", None)
         return TurnView(**row, **result)
 
     def list_handoffs(self, limit: int) -> list[HandoffView]:
@@ -131,8 +140,15 @@ class ChatStore:
         for row in db.execute(query + " ORDER BY sequence", params):
             turn_id = row["turn_id"]
             messages.append(MessageView(turn_id=turn_id, role="user", text=row["message_text"]))
-            if row["result"]:
-                messages.append(MessageView(turn_id=turn_id, role="assistant", text=row["result"]["text"]))
+            if result := row["result"]:
+                references = []
+                if before is not None:
+                    selection = result.get("catalog_selection")
+                    candidates = [selection] if selection else result.get("products", [])
+                    references = [CatalogReference.model_validate(candidate) for candidate in candidates]
+                messages.append(MessageView(
+                    turn_id=turn_id, role="assistant", text=result["text"], catalog_references=references
+                ))
         return messages
 
     def claim(self, lease_seconds: int = 60) -> ClaimedTurn | None:
