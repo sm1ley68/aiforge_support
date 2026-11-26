@@ -15,10 +15,13 @@ from defusedxml.ElementTree import iterparse
 from defusedxml.common import DefusedXmlException
 from pydantic import HttpUrl, TypeAdapter, ValidationError
 
-from .contracts import ProductCard, Source, TurnResult
+from .contracts import ProductCard, Source, TurnResult, VerifiedFact
 
 
-SCHEMA = """
+SCHEMA_VERSION = 2
+COMPARISON_LIMIT = 5
+SCHEMA = f"""
+PRAGMA user_version = {SCHEMA_VERSION};
 CREATE TABLE snapshot (
     sha256 TEXT NOT NULL,
     source_at TEXT NOT NULL
@@ -29,12 +32,20 @@ CREATE TABLE offers (
     sku_key TEXT,
     group_id TEXT,
     title TEXT,
+    title_key TEXT,
+    family_key TEXT,
+    edition TEXT,
+    term TEXT,
+    license_type TEXT,
     url TEXT,
     price TEXT,
     currency TEXT,
     available INTEGER
 );
 CREATE INDEX offers_sku ON offers (sku_key);
+CREATE INDEX offers_title ON offers (title_key);
+CREATE INDEX offers_family ON offers (family_key);
+CREATE INDEX offers_group ON offers (group_id, offer_id);
 """
 
 SKU_REQUEST = re.compile(
@@ -42,7 +53,32 @@ SKU_REQUEST = re.compile(
     r"([\w][\w./+:-]{0,127})[?]?",
     re.IGNORECASE,
 )
+PRODUCT_REQUEST = re.compile(
+    r"(?P<command>нужен|нужна|нужно|найди(?:те)? продукт)\s+(?P<name>.{1,240}?)\??",
+    re.IGNORECASE,
+)
+COMPARE_REQUEST = re.compile(r"сравни(?:те)?\s+редакции\s+(.{1,240}?)\??", re.IGNORECASE)
 HTTP_URL = TypeAdapter(HttpUrl)
+
+PARAMETER_NAMES = {
+    "sku": "sku",
+    "артикул": "sku",
+    "vendorcode": "sku",
+    "family": "family",
+    "product family": "family",
+    "семейство": "family",
+    "линейка": "family",
+    "edition": "edition",
+    "редакция": "edition",
+    "license term": "term",
+    "срок лицензии": "term",
+    "срок действия лицензии": "term",
+    "license type": "license_type",
+    "тип лицензии": "license_type",
+}
+
+FACT_LABELS = {"edition": "редакция", "term": "срок лицензии", "license_type": "тип лицензии"}
+OFFER_FIELDS = "offer_id, sku, title, url, price, currency, available, source_at"
 
 
 @dataclass(frozen=True)
@@ -56,13 +92,20 @@ class Snapshot:
 @dataclass(frozen=True)
 class Offer:
     offer_id: str
-    sku: str
+    sku: str | None
     title: str | None
     url: str | None
     price: str | None
     currency: str | None
     available: int | None
     source_at: str
+    edition: str | None = None
+    term: str | None = None
+    license_type: str | None = None
+
+
+def _name_key(value: str | None) -> str | None:
+    return " ".join((value or "").casefold().split()) or None
 
 
 def _tag(element) -> str:
@@ -93,18 +136,22 @@ def _validated_price(value: str | None, currency: str | None) -> tuple[str | Non
 
 def _offer_row(offer, offer_id: str) -> tuple:
     fields = {}
-    named_sku = None
+    params: dict[str, set[str]] = {}
     for child in offer:
         tag = _tag(child)
         value = (child.text or "").strip()
         if not value:
             continue
-        if tag == "param" and child.attrib.get("name", "").strip().casefold() in {"sku", "артикул", "vendorcode"}:
-            named_sku = named_sku or value
-        elif tag != "param":
+        if tag == "param":
+            key = PARAMETER_NAMES.get(child.attrib.get("name", "").strip().casefold())
+            if key:
+                params.setdefault(key, set()).add(value)
+        else:
             fields.setdefault(tag, value)
 
-    sku = fields.get("vendorCode") or named_sku
+    known = {key: next(iter(values)) for key, values in params.items() if len(values) == 1}
+    sku = fields.get("vendorCode") or known.get("sku")
+    title = fields.get("name") or fields.get("model")
     raw_available = offer.attrib.get("available", "").strip().casefold()
     available = {"true": 1, "false": 0, "1": 1, "0": 0}.get(raw_available)
     price, currency = _validated_price(fields.get("price"), fields.get("currencyId"))
@@ -112,8 +159,13 @@ def _offer_row(offer, offer_id: str) -> tuple:
         offer_id,
         sku,
         sku.casefold() if sku else None,
-        offer.attrib.get("group_id"),
-        fields.get("name") or fields.get("model"),
+        offer.attrib.get("group_id", "").strip() or None,
+        title,
+        _name_key(title),
+        _name_key(known.get("family")),
+        known.get("edition"),
+        known.get("term"),
+        known.get("license_type"),
         fields.get("url"),
         price,
         currency,
@@ -146,7 +198,10 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
                     continue
                 offer_id = element.attrib.get("id", "").strip()
                 if offer_id:
-                    db.execute("INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _offer_row(element, offer_id))
+                    db.execute(
+                        "INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        _offer_row(element, offer_id),
+                    )
                     inserted += 1
                 else:
                     skipped += 1
@@ -178,53 +233,157 @@ def build_index(source: Path, destination: Path, *, source_at: str | None = None
     return snapshot
 
 
-def lookup_sku(index: Path, sku: str) -> list[Offer]:
+def _open_catalog(index: Path):
     uri = f"{index.resolve().as_uri()}?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as db:
+    return closing(sqlite3.connect(uri, uri=True))
+
+
+def lookup_sku(index: Path, sku: str) -> list[Offer]:
+    with _open_catalog(index) as db:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        fields = OFFER_FIELDS
+        if version >= SCHEMA_VERSION:
+            fields += ", edition, term, license_type"
         rows = db.execute(
-            """SELECT offer_id, sku, title, url, price, currency, available, source_at
-               FROM offers CROSS JOIN snapshot
-               WHERE sku_key = ? LIMIT 2""",
+            f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE sku_key = ? LIMIT 2",
             (sku.strip().casefold(),),
         )
         return [Offer(*row) for row in rows]
 
 
-def catalog_reply(index: Path, text: str) -> TurnResult | None:
-    request = SKU_REQUEST.fullmatch(text.strip())
-    if request is None:
+def _product_card(offer: Offer, match_summary: str) -> ProductCard | None:
+    try:
+        url = HTTP_URL.validate_python(offer.url)
+    except ValidationError:
         return None
 
-    sku = request[1]
+    title = offer.title or offer.sku or f"Предложение {offer.offer_id}"
+    source = Source(title=title, url=url)
+    facts = []
+    for field in FACT_LABELS:
+        value = getattr(offer, field)
+        if value is not None:
+            facts.append(VerifiedFact(field=field, value=value, source=source))
+    return ProductCard(
+        offer_id=offer.offer_id,
+        sku=offer.sku,
+        title=title,
+        url=url,
+        verified_facts=facts,
+        match_summary=match_summary,
+        price_amount=Decimal(offer.price) if offer.price is not None else None,
+        currency=offer.currency,
+        availability=bool(offer.available) if offer.available is not None else None,
+        snapshot_at=datetime.fromisoformat(offer.source_at),
+    )
+
+
+def _answer(text: str, cards: list[ProductCard]) -> TurnResult:
+    return TurnResult(
+        outcome="answer",
+        text=text,
+        products=cards,
+        sources=[Source(title=card.title, url=card.url) for card in cards],
+    )
+
+
+def _sku_reply(index: Path, sku: str) -> TurnResult:
     matches = lookup_sku(index, sku)
     if not matches:
         return TurnResult(outcome="clarify", text=f"Артикул {sku} не найден в текущем снимке. Проверьте его написание.")
     if len(matches) > 1:
         return TurnResult(outcome="clarify", text=f"Для артикула {sku} найдено несколько предложений. Уточните редакцию или срок лицензии.")
 
-    offer = matches[0]
-    try:
-        url = HTTP_URL.validate_python(offer.url)
-    except ValidationError:
+    card = _product_card(matches[0], "Точное совпадение артикула в каталоге")
+    if card is None:
         return TurnResult(outcome="clarify", text=f"Для артикула {sku} в каталоге нет проверяемой ссылки. Могу передать вопрос менеджеру.")
+    return _answer(f"Нашёл карточку по артикулу {card.sku}. Данные о цене и наличии относятся к снимку каталога.", [card])
 
-    card = ProductCard(
-        offer_id=offer.offer_id,
-        sku=offer.sku,
-        title=offer.title or offer.sku,
-        url=url,
-        match_summary="Точное совпадение артикула в каталоге",
-        price_amount=Decimal(offer.price) if offer.price is not None else None,
-        currency=offer.currency,
-        availability=bool(offer.available) if offer.available is not None else None,
-        snapshot_at=datetime.fromisoformat(offer.source_at),
-    )
-    return TurnResult(
-        outcome="answer",
-        text=f"Нашёл карточку по артикулу {offer.sku}. Данные о цене и наличии относятся к снимку каталога.",
-        products=[card],
-        sources=[Source(title=card.title, url=card.url)],
-    )
+
+def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
+    identities = db.execute(
+        """SELECT DISTINCT group_id, CASE WHEN group_id IS NULL THEN offer_id END
+           FROM offers WHERE title_key = ? OR family_key = ? LIMIT 2""",
+        (key, key),
+    ).fetchall()
+    if len(identities) != 1:
+        return TurnResult(outcome="clarify", text="Не удалось однозначно определить семейство. Укажите точное название редакции.")
+
+    group_id, offer_id = identities[0]
+    condition, value = ("group_id", group_id) if group_id else ("offer_id", offer_id)
+    rows = db.execute(
+        f"""SELECT {OFFER_FIELDS}, edition, term, license_type FROM offers CROSS JOIN snapshot
+            WHERE {condition} = ? ORDER BY offer_id LIMIT ?""",
+        (value, COMPARISON_LIMIT + 1),
+    ).fetchall()
+    cards = [
+        card
+        for row in rows[:COMPARISON_LIMIT]
+        if (card := _product_card(Offer(*row), "Предложение из найденного семейства")) is not None
+    ]
+    if not cards:
+        return TurnResult(outcome="clarify", text="У найденных предложений нет проверяемых ссылок. Могу передать вопрос менеджеру.")
+
+    summary = ["Параметры предложений по данным каталога:"]
+    for card in cards:
+        facts = ", ".join(f"{FACT_LABELS[fact.field]}: {fact.value}" for fact in card.verified_facts)
+        summary.append(f"• {card.title} — {facts or 'редакция и условия лицензии не указаны'}")
+    if len(rows) > len(cards):
+        summary.append("Показана часть предложений. Уточните редакцию или срок лицензии, чтобы сузить список.")
+    return _answer("\n".join(summary), cards)
+
+
+def _known_family_prefix(db: sqlite3.Connection, key: str) -> bool:
+    words = key.split()
+    prefixes = [" ".join(words[:count]) for count in range(1, len(words) + 1)]
+    placeholders = ", ".join("?" for _ in prefixes)
+    return db.execute(
+        f"SELECT 1 FROM offers WHERE family_key IN ({placeholders}) LIMIT 1",
+        prefixes,
+    ).fetchone() is not None
+
+
+def _named_product_reply(
+    index: Path, name: str, *, compare: bool = False, explicit: bool = True
+) -> TurnResult | None:
+    key = _name_key(name)
+    if key is None:
+        return None
+    with _open_catalog(index) as db:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version < SCHEMA_VERSION:
+            if explicit:
+                return TurnResult(outcome="clarify", text="Для поиска по названию нужно обновить снимок каталога. Если знаете артикул, пришлите его.")
+            return None
+
+        if compare:
+            return _compare_offers(db, key)
+        rows = db.execute(
+            f"""SELECT {OFFER_FIELDS}, edition, term, license_type FROM offers CROSS JOIN snapshot
+                WHERE title_key = ? LIMIT 2""",
+            (key,),
+        ).fetchall()
+        if not rows and not explicit and not _known_family_prefix(db, key):
+            return None
+    if len(rows) != 1:
+        return TurnResult(outcome="clarify", text=f"Не удалось подтвердить одно предложение с названием «{name}». Укажите точную редакцию или артикул.")
+    card = _product_card(Offer(*rows[0]), "Точное совпадение названия в каталоге")
+    if card is None:
+        return TurnResult(outcome="clarify", text=f"Для «{name}» в каталоге нет проверяемой ссылки. Могу передать вопрос менеджеру.")
+    return _answer(f"Нашёл «{card.title}» по точному названию в каталоге.", [card])
+
+
+def catalog_reply(index: Path, text: str) -> TurnResult | None:
+    text = text.strip()
+    if request := SKU_REQUEST.fullmatch(text):
+        return _sku_reply(index, request[1])
+    if request := COMPARE_REQUEST.fullmatch(text):
+        return _named_product_reply(index, request[1], compare=True)
+    if request := PRODUCT_REQUEST.fullmatch(text):
+        return _named_product_reply(
+            index, request["name"], explicit=request["command"].casefold().startswith("найди")
+        )
+    return None
 
 
 def main() -> None:
