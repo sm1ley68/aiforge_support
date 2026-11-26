@@ -1,10 +1,12 @@
 import asyncio
+import json
 import logging
 import os
 import re
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from time import monotonic
 
 import httpx
 from pydantic import TypeAdapter
@@ -12,13 +14,17 @@ from pydantic import TypeAdapter
 from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
 from aisupport_ml.commerce.contracts import CatalogContext, Message, State
+from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.retrieval import KnowledgeBase
 from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
 from aisupport_ml.contracts import IntentModel, TemporaryReadError
-from aisupport_ml.polza import DEFAULT_MODEL, PolzaIntentModel
+from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
 from .contracts import HandoffDetails, MessageView, ProductCard, Source, TurnResult, VerifiedFact
 from .knowledge import validated_url
+from .polza_egress import (
+    ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, load_egress_filter, polza_scope, prepare, record,
+)
 from .store import ClaimedTurn
 
 
@@ -30,16 +36,82 @@ COMMERCIAL_REQUEST = re.compile(r"скидк|постоплат|предопла
 
 
 class CatalogModel:
-    def __init__(self, api_key: str, model: str):
+    def __init__(
+        self, api_key: str, model: str, *, enabled: bool = False, checker: LocalFilter | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.api_key = api_key
         self.model = model
+        self.enabled = enabled
+        self.checker = checker
+        self.transport = transport
 
-    async def complete(self, system, text, schema):
-        if not self.api_key:
-            raise TemporaryReadError("Catalog extraction provider is unconfigured")
-        async with httpx.AsyncClient(timeout=5) as client:
-            adapter = PolzaIntentModel(client, api_key=self.api_key, model=self.model, max_tokens=384)
-            return await adapter.complete(system, text, schema)
+    async def complete(self, _system, text, schema):
+        if not self.enabled or not self.api_key:
+            block("disabled")
+        if self.checker is None:
+            block("filter_unavailable")
+        if self.model != DEFAULT_MODEL:
+            block("model_not_allowed")
+        if schema != INDEXED_SCHEMA or INDEXED_SCHEMA["properties"].keys() != RESPONSE_FIELDS:
+            block("schema_not_allowed")
+        approved = await prepare(text, self.checker)
+        expected = {
+            "model": DEFAULT_MODEL,
+            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": approved.text}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "ticket_intent", "strict": True, "schema": INDEXED_SCHEMA},
+            },
+            "stream": False, "temperature": 0, "max_tokens": 384,
+        }
+
+        sent = False
+
+        async def validate_request(request: httpx.Request):
+            nonlocal sent
+            try:
+                body = json.loads(request.content)
+            except (TypeError, ValueError):
+                block("request_mismatch")
+            if (
+                request.method != "POST" or str(request.url) != ENDPOINT or body != expected
+                or any(key in request.headers for key in ("cookie", "forwarded", "x-forwarded-for", "x-real-ip"))
+            ):
+                block("request_mismatch")
+            record("allowed", "technical_fields")
+            sent = True
+
+        async def record_response(response: httpx.Response):
+            record("api_response", f"http_{response.status_code}")
+
+        started = monotonic()
+        status = "unavailable"
+        usage = None
+        try:
+            async with httpx.AsyncClient(
+                timeout=5, transport=self.transport, trust_env=False,
+                event_hooks={"request": [validate_request], "response": [record_response]},
+            ) as client:
+                try:
+                    adapter = PolzaIntentModel(client, api_key=self.api_key, model=self.model, max_tokens=384)
+                except (ValueError, httpx.InvalidURL):
+                    block("invalid_endpoint")
+                result, usage = await adapter.complete(SYSTEM, approved.text, INDEXED_SCHEMA)
+            validated = approved.validate_answer(result)
+            status = "ok"
+            return validated, usage
+        except (TemporaryReadError, ValueError) as error:
+            status = type(error).__name__
+            raise
+        finally:
+            if sent:
+                scope = polza_scope.get()
+                logger.info(
+                    "polza_extraction turn_id=%s status=%s duration_ms=%d prompt_tokens=%s completion_tokens=%s",
+                    scope.turn_id if scope else "-", status, int((monotonic() - started) * 1000),
+                    usage.input_tokens if usage else None, usage.output_tokens if usage else None,
+                )
 
 
 def commerce_provider_key() -> str:
@@ -89,11 +161,10 @@ def _requirements(context: CatalogContext | None) -> dict[str, str]:
 
 
 class CommerceBridge:
-    def __init__(self, index_path: Path, model: IntentModel, *, provider_enabled: bool = False):
+    def __init__(self, index_path: Path, model: IntentModel):
         self.agent = CommerceAgent(
             model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=6
         )
-        self.provider_enabled = provider_enabled
 
     def reply(
         self, turn: ClaimedTurn, history: list[MessageView], persisted_state: dict | None
@@ -103,22 +174,20 @@ class CommerceBridge:
         text = turn.message_text
         direct_id = OFFER_ID.fullmatch(text.strip())
         query = direct_id[1] if direct_id else text
-        result = asyncio.run(self.agent.reply(
-            str(turn.chat_id), str(turn.turn_id), query, state=state, history=messages
-        ))
+        scope = TurnScope(str(turn.turn_id), text, tuple(message.text for message in history), persisted_state)
+        token = polza_scope.set(scope)
+        try:
+            result = asyncio.run(self.agent.reply(
+                str(turn.chat_id), str(turn.turn_id), query, state=state, history=messages
+            ))
+        finally:
+            polza_scope.reset(token)
 
         if result.trace is not None:
             logger.info(
                 "commerce_turn turn_id=%s duration_ms=%d prompt_version=%s outcome=%s",
                 turn.turn_id, result.trace.duration_ms, result.trace.prompt_version, result.outcome,
             )
-            if self.provider_enabled:
-                for call in result.trace.calls:
-                    logger.info(
-                        "polza_extraction turn_id=%s status=%s duration_ms=%d prompt_tokens=%s completion_tokens=%s",
-                        turn.turn_id, call.error or "ok", call.duration_ms,
-                        call.input_tokens if not call.error else None, call.output_tokens if not call.error else None,
-                    )
 
         saved_state = STATE.dump_python(result.state, mode="json")
         sources = []
@@ -163,4 +232,12 @@ def commerce_from_env() -> CommerceBridge | None:
         return None
     key = commerce_provider_key()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
-    return CommerceBridge(Path(path), CatalogModel(key, model), provider_enabled=bool(key))
+    enabled, checker = load_egress_filter()
+    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled, checker=checker))
+
+
+def commerce_egress_configured() -> bool:
+    enabled, checker = load_egress_filter()
+    model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
+    endpoint = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
+    return bool(enabled and checker and commerce_provider_key() and model == DEFAULT_MODEL and endpoint == ENDPOINT)

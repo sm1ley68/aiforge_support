@@ -12,7 +12,6 @@ from .commerce_bridge import CommerceBridge, commerce_from_env
 from .contracts import HandoffDetails, MessageView, TurnResult
 from .product_questions import product_question_reply
 from .store import ChatStore
-from .task_extraction import DEFAULT_TASK_MODEL, PolzaTaskExtractor, extraction_turn_id
 from .task_search import task_reply
 
 logger = logging.getLogger(__name__)
@@ -38,16 +37,12 @@ def reply_from_env() -> Reply:
         return demo_reply
 
     index = Path(index_path)
-    key = (os.getenv("POLZA_API_KEY") or "").strip()
-    model = (os.getenv("POLZA_TASK_MODEL") or DEFAULT_TASK_MODEL).strip() or DEFAULT_TASK_MODEL
-    extractor = PolzaTaskExtractor(key, model) if key else None
 
     def reply(text: str, history: list[MessageView]) -> TurnResult:
         return (
             product_question_reply(index, text, history)
             or task_reply(index, text, history)
             or catalog_reply(index, text)
-            or (task_reply(index, text, history, extractor=extractor) if extractor else None)
             or demo_reply(text, history)
         )
 
@@ -65,7 +60,6 @@ def process_one(
     outcome = "failed"
     logger.info("turn_claimed turn_id=%s attempt=%d", turn.turn_id, turn.attempts)
     history = store.previous_messages(turn)
-    trace = extraction_turn_id.set(str(turn.turn_id))
     try:
         if commerce is not None:
             result = commerce.reply(turn, history, store.previous_commerce_state(turn))
@@ -83,8 +77,6 @@ def process_one(
     else:
         outcome = result.outcome
         saved = store.finish(turn, result=result)
-    finally:
-        extraction_turn_id.reset(trace)
 
     logger.info(
         "turn_finished turn_id=%s attempt=%d outcome=%s saved=%s duration_ms=%d",

@@ -1,11 +1,9 @@
-import asyncio
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from uuid import uuid4
 
-import httpx
 
 from softline_backend.catalog import build_index
 from softline_backend.contracts import MessageView
@@ -117,54 +115,6 @@ class RecommendationTests(unittest.TestCase):
 
 
 class TaskModelTests(unittest.TestCase):
-    def test_polza_whole_request_is_cancelled_at_timeout(self):
-        from softline_backend.task_extraction import PolzaTaskExtractor
-
-        cancelled = []
-
-        async def handle(_request):
-            try:
-                await asyncio.sleep(2)
-            finally:
-                cancelled.append(True)
-
-        extractor = PolzaTaskExtractor("fake-key", timeout=0.01, transport=httpx.MockTransport(handle))
-        self.assertIsNone(extractor("Нужна защита почты", []))
-        self.assertEqual(cancelled, [True])
-
-    def test_polza_requests_strict_schema_and_rejects_invented_facts(self):
-        from softline_backend.task_extraction import PolzaTaskExtractor
-
-        raw = {
-            "intent": "task",
-            "terms": ["шифрование"],
-            "capabilities": [],
-            "user_limit": 50,
-            "deployment": "локально",
-            "budget_rubles": 10000,
-            "origin": "Россия",
-            "missing": None,
-        }
-        requests = []
-
-        def handle(request):
-            requests.append(request)
-            payload = json.loads(request.content)
-            self.assertEqual(str(request.url), "https://polza.ai/api/v1/chat/completions")
-            self.assertEqual(payload["response_format"]["type"], "json_schema")
-            schema = payload["response_format"]["json_schema"]
-            self.assertTrue(schema["strict"])
-            self.assertFalse(schema["schema"]["additionalProperties"])
-            self.assertNotIn("assistant context", request.content.decode())
-            content = raw if len(requests) == 1 else raw | {"price": 100, "url": "https://bogus.example"}
-            return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(content)}}]})
-
-        extractor = PolzaTaskExtractor("fake-key", transport=httpx.MockTransport(handle))
-        history = [MessageView(turn_id=uuid4(), role="assistant", text="assistant context")]
-        result = extractor("Нужен вариант шифрования для 50 человек в нашей инфраструктуре", history)
-        self.assertEqual(result.user_limit, 50)
-        self.assertIsNone(extractor("Нужен вариант шифрования", history))
-
     def test_free_text_structured_parse_is_used_only_to_search_and_prove_catalog_data(self):
         from softline_backend.task_extraction import TaskExtraction
 
@@ -188,24 +138,3 @@ class TaskModelTests(unittest.TestCase):
             self.assertEqual(result.products[0].sku, "GROUNDED")
             self.assertEqual(str(result.sources[0].url), "https://example.com/GROUNDED")
             self.assertIsNone(task_reply(index, text, [], extractor=lambda *_: None))
-
-    def test_polza_http_error_falls_back_to_deterministic_search(self):
-        from softline_backend.task_extraction import PolzaTaskExtractor
-
-        def handle(_request):
-            return httpx.Response(503)
-
-        extractor = PolzaTaskExtractor("fake-key", transport=httpx.MockTransport(handle))
-        with tempfile.TemporaryDirectory() as directory:
-            index = Path(directory) / "catalog.sqlite3"
-            feed = Path(directory) / "catalog.xml"
-            feed.write_text(
-                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
-                + offer("LEXICAL")
-                + '</offers></shop></yml_catalog>',
-                encoding="utf-8",
-            )
-            build_index(feed, index)
-            text = "Подбери защиту почты и файлов"
-            result = task_reply(index, text, [], extractor=extractor)
-            self.assertEqual(result, task_reply(index, text, []))

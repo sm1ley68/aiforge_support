@@ -12,7 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from .advisor_api import advisor_router
-from .commerce_bridge import commerce_provider_key
+from .commerce_bridge import commerce_egress_configured
 from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, TurnAccepted, TurnView
 from .readiness import ProviderStatus, catalog_status
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
@@ -151,13 +151,13 @@ def app_from_env() -> FastAPI:
     logging.basicConfig(level=logging.INFO)
     index_path = os.getenv("CATALOG_INDEX_PATH")
     commerce_path = os.getenv("COMMERCE_CATALOG_INDEX_PATH", "").strip()
-    key = commerce_provider_key() if commerce_path else os.getenv("POLZA_API_KEY", "").strip()
+    provider_configured = bool(commerce_path) and commerce_egress_configured()
     advisor_path = os.getenv("STORE_ADVISOR_DIST_PATH", "").strip()
     return create_app(
         ChatStore(os.getenv("DATABASE_URL", "")),
         manager_token=os.getenv("MANAGER_TOKEN"),
         catalog_index=Path(index_path) if index_path else None,
         commerce_index=Path(commerce_path) if commerce_path else None,
-        provider_status="configured" if key else "deterministic",
+        provider_status="configured" if provider_configured else "deterministic",
         advisor_dist=Path(advisor_path) if advisor_path else None,
     )

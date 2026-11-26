@@ -5,7 +5,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY aisupport_ml/ aisupport_ml/
 COPY softline_backend/ softline_backend/
-RUN python -m pip install --no-cache-dir '.[backend]' \
+RUN python -m pip install --no-cache-dir '.[backend,privacy]' \
     && useradd --system --no-create-home app
 WORKDIR /
 USER app
