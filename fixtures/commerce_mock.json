@@ -1,0 +1,176 @@
+{
+  "catalog": [
+    {
+      "sku": "VG-STD",
+      "name": "VectorGuard Standard",
+      "price": "1200.00",
+      "currency": "RUB",
+      "aliases": [
+        "VectorGuard",
+        "VectorGuard стандарт"
+      ],
+      "source": {
+        "id": "catalog-VG-STD",
+        "version": "1",
+        "title": "VectorGuard Standard",
+        "text": "Электронная лицензия.",
+        "url": "https://store.example.test/catalog-VG-STD",
+        "sku": "VG-STD"
+      },
+      "availability": "Доступна электронная поставка в течение одного рабочего дня."
+    },
+    {
+      "sku": "VG-PRO",
+      "name": "VectorGuard Pro",
+      "price": "1850.50",
+      "currency": "RUB",
+      "aliases": [
+        "VectorGuard",
+        "VectorGuard про"
+      ],
+      "source": {
+        "id": "catalog-VG-PRO",
+        "version": "1",
+        "title": "VectorGuard Pro",
+        "text": "Электронная лицензия.",
+        "url": "https://store.example.test/catalog-VG-PRO",
+        "sku": "VG-PRO"
+      }
+    },
+    {
+      "sku": "VD-CLOUD",
+      "name": "VectorDrive Cloud",
+      "price": "3000.00",
+      "currency": "RUB",
+      "aliases": [
+        "VectorDrive"
+      ],
+      "source": {
+        "id": "catalog-VD-CLOUD",
+        "version": "1",
+        "title": "VectorDrive Cloud",
+        "text": "Электронная лицензия.",
+        "url": "https://store.example.test/catalog-VD-CLOUD",
+        "sku": "VD-CLOUD"
+      }
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "kb-download-invoice",
+      "version": "1",
+      "title": "Как скачать счёт",
+      "text": "Войдите в личный кабинет, откройте «Мои заказы», выберите заказ и нажмите «Скачать счёт».",
+      "url": "https://store.example.test/kb-download-invoice",
+      "reusable": true,
+      "aliases": [
+        "где найти счет",
+        "скачать счет",
+        "документы покупки",
+        "загрузить счет"
+      ]
+    },
+    {
+      "id": "kb-license",
+      "version": "1",
+      "title": "Лицензирование VectorGuard Pro",
+      "text": "На каждое защищаемое устройство требуется одна лицензия.",
+      "url": "https://store.example.test/kb-license",
+      "sku": "VG-PRO",
+      "reusable": true,
+      "aliases": [
+        "как лицензируется",
+        "лицензия на устройство"
+      ]
+    },
+    {
+      "id": "kb-renew",
+      "version": "1",
+      "title": "Продление подписки",
+      "text": "Подписку можно продлить в разделе «Лицензии».",
+      "url": "https://store.example.test/kb-renew",
+      "aliases": [
+        "продлить подписку",
+        "как продлить подписку"
+      ],
+      "exceptions": [
+        "kb-renew-exception"
+      ]
+    },
+    {
+      "id": "kb-renew-exception",
+      "version": "1",
+      "title": "Исключение для истекшей подписки",
+      "text": "Если подписка уже истекла, выберите «Купить заново».",
+      "url": "https://store.example.test/kb-renew-exception"
+    },
+    {
+      "id": "kb-old",
+      "version": "1",
+      "title": "Скачать счёт из архива",
+      "text": "Откройте устаревший раздел «Архив».",
+      "url": "https://store.example.test/kb-old",
+      "valid_until": "2026-01-01T00:00:00+00:00"
+    }
+  ],
+  "orders": [
+    {
+      "id": "ORD-101",
+      "customer_id": "BUY-1",
+      "source": {
+        "id": "order-101",
+        "version": "1",
+        "title": "Покупка ORD-101",
+        "text": "Счёт по покупке ORD-101 доступен в разделе «Мои заказы».",
+        "url": "https://store.example.test/order-101",
+        "customer_id": "BUY-1"
+      }
+    },
+    {
+      "id": "ORD-202",
+      "customer_id": "BUY-2",
+      "source": {
+        "id": "order-202",
+        "version": "1",
+        "title": "Покупка ORD-202",
+        "text": "Счёт по покупке ORD-202 доступен в разделе «Мои заказы».",
+        "url": "https://store.example.test/order-202",
+        "customer_id": "BUY-2"
+      }
+    }
+  ],
+  "conditions": [
+    {
+      "id": "terms-vd-buyer-1",
+      "version": "1",
+      "title": "Постоплата по договору",
+      "text": "Постоплата через 30 дней для VectorDrive Cloud.",
+      "url": "https://store.example.test/terms-vd-buyer-1",
+      "customer_id": "BUY-1",
+      "sku": "VD-CLOUD",
+      "aliases": [
+        "постоплата 30 дней",
+        "с постоплатой 30 дней"
+      ]
+    }
+  ],
+  "customers": [
+    {
+      "id": "BUY-1",
+      "company": "ООО «Демо Покупатель»",
+      "tax_id": "0000000000"
+    },
+    {
+      "id": "BUY-2",
+      "company": "ООО «Второй Демо Покупатель»",
+      "tax_id": "0000000001"
+    }
+  ],
+  "seller": {
+    "company": "ООО «Демо Поставщик»",
+    "tax_id": "0000000009",
+    "bank": "Демо Банк",
+    "bank_code": "000000000",
+    "settlement_account": "00000000000000000000"
+  }
+}

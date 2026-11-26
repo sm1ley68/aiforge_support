@@ -1,0 +1,767 @@
+[
+  {
+    "id": "quote_then_invoice",
+    "critical": true,
+    "final": {
+      "documents": 2,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "Подготовьте КП на VectorGuard.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "clarify"
+        }
+      },
+      {
+        "text": "Вариант 1, нужно 3 лицензии.",
+        "model": {
+          "extraction": {
+            "kind": "continue",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": null,
+                "quantity": 3
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": 1,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "3600.00",
+          "lines": [
+            [
+              "VG-STD",
+              3
+            ]
+          ]
+        }
+      },
+      {
+        "text": "Теперь выставьте счёт.",
+        "model": {
+          "extraction": {
+            "kind": "invoice",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "invoice_ready",
+          "total": "3600.00",
+          "lines": [
+            [
+              "VG-STD",
+              3
+            ]
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "reprice",
+    "critical": true,
+    "final": {
+      "documents": 3,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "Нужно КП на 2 лицензии VG-PRO.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "3701.00"
+        }
+      },
+      {
+        "text": "Теперь выставьте счёт.",
+        "model": {
+          "extraction": {
+            "kind": "invoice",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "3800.00"
+        },
+        "price_change": [
+          "VG-PRO",
+          "1900.00"
+        ]
+      },
+      {
+        "text": "Выставьте счёт.",
+        "model": {
+          "extraction": {
+            "kind": "invoice",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "clarify",
+          "contains": "Подтвердите"
+        }
+      },
+      {
+        "text": "Да, согласен на новую цену.",
+        "model": {
+          "extraction": {
+            "kind": "continue",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": true
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "invoice_ready",
+          "total": "3800.00"
+        }
+      }
+    ]
+  },
+  {
+    "id": "quantity_revision",
+    "final": {
+      "documents": 2
+    },
+    "turns": [
+      {
+        "text": "КП на 2 лицензии VG-PRO, пожалуйста.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "3701.00"
+        }
+      },
+      {
+        "text": "Давайте 20 вместо 2.",
+        "model": {
+          "extraction": {
+            "kind": "continue",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": null,
+                "quantity": 20
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "37010.00"
+        }
+      }
+    ]
+  },
+  {
+    "id": "multi_line",
+    "final": {
+      "documents": 1
+    },
+    "turns": [
+      {
+        "text": "Сделайте КП на 2 лицензии VG-PRO и 3 лицензии VD-CLOUD.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              },
+              {
+                "op": "upsert",
+                "reference": "VD-CLOUD",
+                "quantity": 3
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "12701.00"
+        }
+      }
+    ]
+  },
+  {
+    "id": "direct_invoice",
+    "final": {
+      "documents": 1
+    },
+    "turns": [
+      {
+        "text": "Выставьте счёт на 2 лицензии VG-PRO.",
+        "model": {
+          "extraction": {
+            "kind": "invoice",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "invoice_ready",
+          "total": "3701.00"
+        }
+      }
+    ]
+  },
+  {
+    "id": "no_invoice_details",
+    "buyer": "guest",
+    "final": {
+      "documents": 0,
+      "handoffs": 1
+    },
+    "turns": [
+      {
+        "text": "Выставьте счёт на 2 лицензии VG-PRO.",
+        "model": {
+          "extraction": {
+            "kind": "invoice",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "handoff",
+          "reason": "billing_details_missing"
+        }
+      }
+    ]
+  },
+  {
+    "id": "special_terms_missing",
+    "critical": true,
+    "final": {
+      "documents": 0,
+      "handoffs": 1
+    },
+    "turns": [
+      {
+        "text": "Сделайте КП на 2 лицензии VG-PRO, нужна постоплата 30 дней.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": "постоплата 30 дней",
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "handoff",
+          "reason": "special_terms_unconfirmed"
+        }
+      }
+    ]
+  },
+  {
+    "id": "approved_terms",
+    "final": {
+      "documents": 1,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "Подготовьте КП на VD-CLOUD, 2 лицензии, постоплата 30 дней.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VD-CLOUD",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": "постоплата 30 дней",
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready",
+          "total": "6000.00",
+          "condition_ids": [
+            "terms-vd-buyer-1"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "foreign_order",
+    "critical": true,
+    "final": {
+      "documents": 0,
+      "handoffs": 1
+    },
+    "turns": [
+      {
+        "text": "Где счёт по моей покупке ORD-202?",
+        "model": {
+          "extraction": {
+            "kind": "order",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": "ORD-202",
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "handoff",
+          "reason": "order_unavailable",
+          "source_ids": []
+        }
+      }
+    ]
+  },
+  {
+    "id": "own_order",
+    "final": {
+      "documents": 0,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "Где счёт по покупке ORD-101?",
+        "model": {
+          "extraction": {
+            "kind": "order",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": "ORD-101",
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "answer",
+          "source_ids": [
+            "order-101"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "faq_publication",
+    "critical": true,
+    "final": {
+      "articles": 1,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "Как скачать счёт?",
+        "model": {
+          "extraction": {
+            "kind": "knowledge",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": [
+            "kb-download-invoice"
+          ]
+        },
+        "expected": {
+          "outcome": "answer",
+          "knowledge": "published",
+          "contains": "Мои заказы"
+        }
+      },
+      {
+        "text": "Подскажите, где найти счёт?",
+        "model": {
+          "extraction": {
+            "kind": "knowledge",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": [
+            "faq-ff011170f329674e"
+          ]
+        },
+        "expected": {
+          "outcome": "answer",
+          "knowledge": "existing",
+          "uses_generated": true,
+          "contains": "Мои заказы"
+        },
+        "conversation": "chat-2"
+      }
+    ]
+  },
+  {
+    "id": "policy_exception",
+    "final": {
+      "articles": 0
+    },
+    "turns": [
+      {
+        "text": "Как продлить подписку?",
+        "model": {
+          "extraction": {
+            "kind": "knowledge",
+            "lines": [],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": [
+            "kb-renew"
+          ]
+        },
+        "expected": {
+          "outcome": "answer",
+          "source_ids": [
+            "kb-renew",
+            "kb-renew-exception"
+          ],
+          "knowledge": "draft"
+        }
+      }
+    ]
+  },
+  {
+    "id": "catalog_price",
+    "turns": [
+      {
+        "text": "Сколько стоит VG-PRO?",
+        "model": {
+          "extraction": {
+            "kind": "catalog",
+            "lines": [],
+            "product": "VG-PRO",
+            "catalog_fact": "price",
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "answer",
+          "contains": "1850.50 RUB"
+        }
+      }
+    ]
+  },
+  {
+    "id": "unknown_availability",
+    "turns": [
+      {
+        "text": "Когда поставите VG-PRO?",
+        "model": {
+          "extraction": {
+            "kind": "catalog",
+            "lines": [],
+            "product": "VG-PRO",
+            "catalog_fact": "availability",
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "handoff",
+          "reason": "availability_unknown"
+        }
+      }
+    ]
+  },
+  {
+    "id": "repeat_message",
+    "final": {
+      "documents": 1,
+      "handoffs": 0
+    },
+    "turns": [
+      {
+        "text": "КП на 2 лицензии VG-PRO.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready"
+        },
+        "message": "same"
+      },
+      {
+        "text": "КП на 2 лицензии VG-PRO.",
+        "model": {
+          "extraction": {
+            "kind": "quote",
+            "lines": [
+              {
+                "op": "upsert",
+                "reference": "VG-PRO",
+                "quantity": 2
+              }
+            ],
+            "product": null,
+            "catalog_fact": null,
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "quote_ready"
+        },
+        "message": "same"
+      }
+    ]
+  },
+  {
+    "id": "ambiguous_catalog_price",
+    "turns": [
+      {
+        "text": "Сколько стоит VectorGuard?",
+        "model": {
+          "extraction": {
+            "kind": "catalog",
+            "lines": [],
+            "product": "VectorGuard",
+            "catalog_fact": "price",
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "clarify",
+          "contains": "VG-STD"
+        }
+      },
+      {
+        "text": "Вариант 1",
+        "model": {
+          "extraction": {
+            "kind": "catalog",
+            "lines": [],
+            "product": "VG-PRO",
+            "catalog_fact": "price",
+            "order_id": null,
+            "special_terms": null,
+            "choice": null,
+            "accept_standard": false,
+            "confirm_price": false
+          },
+          "ids": []
+        },
+        "expected": {
+          "outcome": "answer",
+          "contains": "1200.00 RUB"
+        }
+      }
+    ]
+  }
+]

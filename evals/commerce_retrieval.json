@@ -1,0 +1,6 @@
+[
+  {"id":"invoice_synonyms","query":"Где найти счет по покупке?","expected_ids":["kb-download-invoice"]},
+  {"id":"renewal_and_exception","query":"Как продлить истекшую подписку?","expected_ids":["kb-renew","kb-renew-exception"]},
+  {"id":"license_per_device","query":"Как лицензируется и сколько устройств?","sku":"VG-PRO","expected_ids":["kb-license"]},
+  {"id":"semantic_invoice","query":"Хочу получить платёжный документ","expected_ids":["kb-download-invoice"]}
+]
