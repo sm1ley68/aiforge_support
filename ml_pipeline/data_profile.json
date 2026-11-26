@@ -1,0 +1,134 @@
+{
+  "schema_version": "1",
+  "created": "2026-11-26",
+  "shape": {
+    "n_rows": 495,
+    "n_cols": 5,
+    "memory_mb": 0.06,
+    "sampled": false,
+    "sample_rows": null
+  },
+  "target": {
+    "name": "archive_topic",
+    "task": "multiclass",
+    "n_classes": 9,
+    "class_balance": {
+      "Просто цена конкретного товара": 0.2646,
+      "Прочее (покупка)": 0.2424,
+      "Счет / КП как документ (с реквизитами)": 0.1535,
+      "Конфигурация / спецификация": 0.1414,
+      "Доступность вендора (можно ли купить)": 0.0909,
+      "Физлицо / самозанятый / срок": 0.0545,
+      "Скидки / льготы / спецусловия": 0.0303,
+      "Госзакупки / процедуры": 0.0162,
+      "Follow-up / не дозвонился": 0.0061
+    },
+    "minority_frac": 0.0061
+  },
+  "columns": {
+    "record_id": {
+      "kind": "id",
+      "missing_frac": 0.0,
+      "n_unique": 495,
+      "unique_frac": 1.0
+    },
+    "source_file": {
+      "kind": "categorical",
+      "missing_frac": 0.0,
+      "n_unique": 3,
+      "unique_frac": 0.0061,
+      "n_levels": 3,
+      "top": {
+        "buy_part_1_masked.txt": 0.3455,
+        "buy_part_2_masked.txt": 0.3354,
+        "buy_part_3_masked.txt": 0.3192
+      }
+    },
+    "archive_topic": {
+      "kind": "categorical",
+      "missing_frac": 0.0,
+      "n_unique": 9,
+      "unique_frac": 0.0182,
+      "n_levels": 9,
+      "top": {
+        "Просто цена конкретного товара": 0.2646,
+        "Прочее (покупка)": 0.2424,
+        "Счет / КП как документ (с реквизитами)": 0.1535,
+        "Конфигурация / спецификация": 0.1414,
+        "Доступность вендора (можно ли купить)": 0.0909
+      }
+    },
+    "body_chars": {
+      "kind": "numeric",
+      "missing_frac": 0.0,
+      "n_unique": 291,
+      "unique_frac": 0.5879,
+      "min": 48.0,
+      "median": 213.0,
+      "max": 1525.0,
+      "skew": 2.4215,
+      "outlier_frac": 0.0566
+    },
+    "body_words": {
+      "kind": "numeric",
+      "missing_frac": 0.0,
+      "n_unique": 88,
+      "unique_frac": 0.1778,
+      "min": 3.0,
+      "median": 25.0,
+      "max": 215.0,
+      "skew": 2.5981,
+      "outlier_frac": 0.0566
+    }
+  },
+  "duplicates": {
+    "exact_row_frac": 0.0
+  },
+  "constant_columns": [],
+  "high_cardinality_categoricals": [],
+  "datetime_columns": [],
+  "time_col": null,
+  "group_col": null,
+  "entity_candidates": [
+    "record_id"
+  ],
+  "leakage_suspects": [],
+  "traits": {
+    "n_rows": 495,
+    "n_features": 4,
+    "task": "multiclass",
+    "minority_frac": 0.0061,
+    "has_datetime": false,
+    "has_groups": false,
+    "small_data": true,
+    "imbalanced": true,
+    "high_card_categoricals": []
+  },
+  "archive_checks": {
+    "exact_duplicates": 0,
+    "normalized_body_duplicates": 0,
+    "duplicate_ids": 0,
+    "role_marked_rows": 0,
+    "by_file": {
+      "buy_part_1_masked.txt": 171,
+      "buy_part_2_masked.txt": 166,
+      "buy_part_3_masked.txt": 158
+    },
+    "by_topic": {
+      "Просто цена конкретного товара": 131,
+      "Прочее (покупка)": 120,
+      "Счет / КП как документ (с реквизитами)": 76,
+      "Конфигурация / спецификация": 70,
+      "Доступность вендора (можно ли купить)": 45,
+      "Физлицо / самозанятый / срок": 27,
+      "Скидки / льготы / спецусловия": 15,
+      "Госзакупки / процедуры": 8,
+      "Follow-up / не дозвонился": 3
+    }
+  },
+  "manual_leakage_risks": [
+    "Raw headers include the archive topic; exclude the entire metadata header from model input.",
+    "Record ID and source file are provenance only; keep them out of model features.",
+    "The unsegmented record can contain later replies and outcomes; use verified customer prefixes only."
+  ]
+}
