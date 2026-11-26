@@ -2,10 +2,12 @@ import logging
 import os
 import re
 from collections.abc import Callable
+from pathlib import Path
 from time import sleep
 
 from psycopg import OperationalError
 
+from .catalog import catalog_reply
 from .contracts import HandoffDetails, MessageView, TurnResult
 from .store import ChatStore
 
@@ -24,6 +26,19 @@ def demo_reply(_text: str, _history: list[MessageView]) -> TurnResult:
         outcome="clarify",
         text="Уточните, пожалуйста, название продукта или задачу, которую нужно решить.",
     )
+
+
+def reply_from_env() -> Reply:
+    index_path = os.getenv("CATALOG_INDEX_PATH")
+    if not index_path:
+        return demo_reply
+
+    index = Path(index_path)
+
+    def reply(text: str, history: list[MessageView]) -> TurnResult:
+        return catalog_reply(index, text) or demo_reply(text, history)
+
+    return reply
 
 
 def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
@@ -55,9 +70,10 @@ def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
 def main():
     logging.basicConfig(level=logging.INFO)
     store = ChatStore(os.environ["DATABASE_URL"])
+    reply = reply_from_env()
     while True:
         try:
-            if not process_one(store):
+            if not process_one(store, reply):
                 sleep(0.5)
         except OperationalError:
             logger.warning("PostgreSQL unavailable, retrying")

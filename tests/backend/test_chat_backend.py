@@ -1,5 +1,8 @@
 import os
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -7,9 +10,10 @@ from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
 
 from softline_backend.api import create_app
+from softline_backend.catalog import build_index
 from softline_backend.contracts import TurnResult
 from softline_backend.store import ChatStore
-from softline_backend.worker import process_one
+from softline_backend.worker import process_one, reply_from_env
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "requires PostgreSQL")
@@ -116,3 +120,24 @@ class ChatBackendTests(unittest.TestCase):
             detail = manager.get(f"/manager/handoffs/{turn_id}", headers=headers).json()
             self.assertEqual(detail["messages"][0]["text"], "Позовите менеджера, пожалуйста.")
             self.assertEqual(detail["messages"][1]["role"], "assistant")
+
+
+    def test_catalog_result_reaches_chat_through_configured_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            feed.write_text(
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="example" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            index = Path(folder) / "catalog.sqlite3"
+            build_index(feed, index)
+            turn_id = self.submit("sku", "SKU: MAIL-12").json()["turn_id"]
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                self.assertTrue(process_one(self.store, reply_from_env()))
+
+        turn = self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+        self.assertEqual(turn["outcome"], "answer")
+        self.assertEqual(turn["products"][0]["sku"], "MAIL-12")
+        self.assertEqual(turn["sources"][0]["url"], "https://example.com/mail")
