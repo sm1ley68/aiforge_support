@@ -31,7 +31,7 @@ Never choose a SKU, generate an answer, or infer any availability, compatibility
 _FACT_FIELDS = ("price", "availability", "term")
 INDEXED_SCHEMA = object_schema({
     "action": {"type": "string", "enum": ["named", "need", "fact", "continue", "other"]},
-    "fact": {"type": ["string", "null"], "enum": [*_FACT_FIELDS, None]},
+    "fact": {"anyOf": [{"type": "string", "enum": list(_FACT_FIELDS)}, {"type": "null"}]},
     "product": OPTIONAL_TEXT,
     "edition": OPTIONAL_TEXT,
     "goal": OPTIONAL_TEXT,
@@ -210,6 +210,21 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
         if mail or server or any(pattern.search(text) for pattern in (_NODE_COUNT, _LOCAL, _CLOUD, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN)):
             return CatalogInput("continue", mail=mail[0] if mail else None, file_os=server[0] if server else None)
     return None
+
+
+def _keep_selection(previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogInput:
+    if previous is None or previous.mode != "need" or patch.action in {"continue", "fact"}:
+        return patch
+    refinement = fallback_input(text, previous)
+    if refinement is None or refinement.action != "continue":
+        return patch
+    # A message composed only of requirement values cannot replace the active task.
+    remaining = text
+    for pattern in (_EXCHANGE, _FILE_SERVER, _NODE_COUNT, _USER_COUNT, _BUDGET, _UNLIMITED_BUDGET,
+                    _CLOUD_EXCLUDED, _LOCAL_EXCLUDED, _LOCAL, _CLOUD, _TERM):
+        remaining = pattern.sub(" ", remaining)
+    context_words = {"а", "и", "только", "на", "под", "руб", "рубль", "рубля", "рублей"}
+    return refinement if set(normalize(remaining).split()) <= context_words else patch
 
 
 def _count(pattern: re.Pattern, text: str, previous: int | None) -> int | None:
@@ -554,6 +569,7 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
 
 
 def decide(index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogDecision:
+    patch = _keep_selection(previous, patch, text)
     if patch.action == "fact":
         return _fact(index, previous, patch, text)
     if patch.action == "other":

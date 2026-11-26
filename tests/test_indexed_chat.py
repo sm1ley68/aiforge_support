@@ -107,9 +107,11 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(partial.text, "Какая ОС у файлового сервера?")
         self.assertEqual(partial.state.catalog_context.nodes, 50)
 
-        self.model.expect("continue", mail="Exchange", file_os="Windows Server 2019")
-        options = await self.chat.reply("needs", "2", "Exchange и Windows Server 2019, локально, 50 узлов, бюджет до 650 тысяч рублей")
+        self.model.expect("named", product="Windows Server 2019")
+        options = await self.chat.reply("needs", "2", "Windows Server 2019, локально, бюджет до 650 тысяч рублей")
         self.assertEqual(options.outcome, "recommend")
+        self.assertEqual(options.state.catalog_context.mode, "need")
+        self.assertEqual(options.state.catalog_context.mail, "Exchange")
         self.assertEqual({item.offer_id for item in options.products}, {"5066", "5058"})
         self.assertIn("384570.00 RUB за 50 узлов", options.text)
 
