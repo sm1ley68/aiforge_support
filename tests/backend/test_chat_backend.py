@@ -141,3 +141,35 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(turn["outcome"], "answer")
         self.assertEqual(turn["products"][0]["sku"], "MAIL-12")
         self.assertEqual(turn["sources"][0]["url"], "https://example.com/mail")
+
+
+    def test_task_constraints_reach_worker_from_persisted_chat_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            index = Path(folder) / "catalog.sqlite3"
+            feed.write_text(
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="example" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                '<description>Защита почты и файлов</description>'
+                '<param name="Развёртывание">on-premise</param>'
+                '<param name="Количество пользователей">100</param>'
+                '<currencyId>RUB</currencyId><price>9000</price>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            build_index(feed, index)
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                reply = reply_from_env()
+            self.submit("task", "Нужна защита почты и файлов на 50 сотрудников")
+            local_id = self.submit("deployment", "Только локально").json()["turn_id"]
+            budget_id = self.submit("budget", "Бюджет до 8 500 рублей").json()["turn_id"]
+            for _ in range(3):
+                self.assertTrue(process_one(self.store, reply))
+
+        local = self.client.get(f"{self.path}/turns/{local_id}", headers=self.headers).json()
+        self.assertEqual(local["outcome"], "answer")
+        self.assertEqual([card["sku"] for card in local["products"]], ["MAIL-12"])
+        self.assertIn("локально", local["text"])
+        self.assertIn("50", local["text"])
+        budget = self.client.get(f"{self.path}/turns/{budget_id}", headers=self.headers).json()
+        self.assertEqual((budget["status"], budget["outcome"], budget["products"]), ("succeeded", "clarify", []))

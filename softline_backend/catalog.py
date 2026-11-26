@@ -18,10 +18,11 @@ from pydantic import HttpUrl, TypeAdapter, ValidationError
 from .contracts import ProductCard, Source, TurnResult, VerifiedFact
 
 
-SCHEMA_VERSION = 2
+NAMED_SCHEMA_VERSION = 2
+TASK_SCHEMA_VERSION = 3
 COMPARISON_LIMIT = 5
 SCHEMA = f"""
-PRAGMA user_version = {SCHEMA_VERSION};
+PRAGMA user_version = {TASK_SCHEMA_VERSION};
 CREATE TABLE snapshot (
     sha256 TEXT NOT NULL,
     source_at TEXT NOT NULL
@@ -40,7 +41,15 @@ CREATE TABLE offers (
     url TEXT,
     price TEXT,
     currency TEXT,
-    available INTEGER
+    available INTEGER,
+    description TEXT,
+    deployment TEXT,
+    user_limit INTEGER,
+    origin TEXT,
+    price_kopecks INTEGER
+);
+CREATE VIRTUAL TABLE task_terms USING fts5(
+    name_terms, description_terms, content='', tokenize='unicode61'
 );
 CREATE INDEX offers_sku ON offers (sku_key);
 CREATE INDEX offers_title ON offers (title_key);
@@ -75,9 +84,18 @@ PARAMETER_NAMES = {
     "срок действия лицензии": "term",
     "license type": "license_type",
     "тип лицензии": "license_type",
+    "deployment": "deployment",
+    "развертывание": "deployment",
+    "тип развертывания": "deployment",
+    "user limit": "user_limit",
+    "количество пользователей": "user_limit",
+    "максимум пользователей": "user_limit",
+    "country of origin": "origin",
+    "страна происхождения": "origin",
 }
 
 FACT_LABELS = {"edition": "редакция", "term": "срок лицензии", "license_type": "тип лицензии"}
+TASK_FACTS = ("deployment", "user_limit", "origin")
 OFFER_FIELDS = "offer_id, sku, title, url, price, currency, available, source_at"
 
 
@@ -102,6 +120,9 @@ class Offer:
     edition: str | None = None
     term: str | None = None
     license_type: str | None = None
+    deployment: str | None = None
+    user_limit: int | None = None
+    origin: str | None = None
 
 
 def _name_key(value: str | None) -> str | None:
@@ -134,16 +155,26 @@ def _validated_price(value: str | None, currency: str | None) -> tuple[str | Non
     return str(price), currency.upper()
 
 
+def _price_kopecks(price: str | None, currency: str | None) -> int | None:
+    if price is None or currency != "RUB":
+        return None
+    rubles = Decimal(price)
+    if rubles > Decimal("92233720368547758.07"):
+        return None
+    rounded = rubles.quantize(Decimal("0.01"))
+    return int(rounded * 100) if rounded == rubles else None
+
+
 def _offer_row(offer, offer_id: str) -> tuple:
     fields = {}
     params: dict[str, set[str]] = {}
     for child in offer:
         tag = _tag(child)
-        value = (child.text or "").strip()
+        value = (" ".join(child.itertext()) if tag == "description" else child.text or "").strip()
         if not value:
             continue
         if tag == "param":
-            key = PARAMETER_NAMES.get(child.attrib.get("name", "").strip().casefold())
+            key = PARAMETER_NAMES.get(child.attrib.get("name", "").strip().casefold().replace("ё", "е"))
             if key:
                 params.setdefault(key, set()).add(value)
         else:
@@ -155,6 +186,22 @@ def _offer_row(offer, offer_id: str) -> tuple:
     raw_available = offer.attrib.get("available", "").strip().casefold()
     available = {"true": 1, "false": 0, "1": 1, "0": 0}.get(raw_available)
     price, currency = _validated_price(fields.get("price"), fields.get("currencyId"))
+    deployment = {
+        "on-premise": "локально",
+        "on-premises": "локально",
+        "on-prem": "локально",
+        "локально": "локально",
+        "локальное": "локально",
+        "cloud": "облако",
+        "облако": "облако",
+        "облачное": "облако",
+    }.get((known.get("deployment") or "").casefold())
+    users = known.get("user_limit", "")
+    user_limit = int(users) if re.fullmatch(r"[1-9][0-9]{0,6}", users) else None
+    origin = known.get("origin")
+    if origin and origin.casefold() in {"ru", "rus", "russia", "russian federation", "рф", "россия", "российская федерация"}:
+        origin = "Россия"
+    description = re.sub(r"<[^>]+>", " ", fields.get("description", ""))
     return (
         offer_id,
         sku,
@@ -170,6 +217,11 @@ def _offer_row(offer, offer_id: str) -> tuple:
         price,
         currency,
         available,
+        description,
+        deployment,
+        user_limit,
+        origin,
+        _price_kopecks(price, currency),
     )
 
 
@@ -199,7 +251,7 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
                 offer_id = element.attrib.get("id", "").strip()
                 if offer_id:
                     db.execute(
-                        "INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         _offer_row(element, offer_id),
                     )
                     inserted += 1
@@ -208,6 +260,12 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
                 stack[-1].remove(element)
     if not inserted:
         raise ValueError("The catalog contains no offers with IDs")
+    db.execute(
+        """INSERT INTO task_terms (rowid, name_terms, description_terms)
+           SELECT rowid, replace(replace(title, 'ё', 'е'), 'Ё', 'Е'),
+                  replace(replace(description, 'ё', 'е'), 'Ё', 'Е')
+           FROM offers"""
+    )
     return Snapshot(digest, timestamp, inserted, skipped)
 
 
@@ -242,7 +300,7 @@ def lookup_sku(index: Path, sku: str) -> list[Offer]:
     with _open_catalog(index) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
         fields = OFFER_FIELDS
-        if version >= SCHEMA_VERSION:
+        if version >= NAMED_SCHEMA_VERSION:
             fields += ", edition, term, license_type"
         rows = db.execute(
             f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE sku_key = ? LIMIT 2",
@@ -260,10 +318,10 @@ def _product_card(offer: Offer, match_summary: str) -> ProductCard | None:
     title = offer.title or offer.sku or f"Предложение {offer.offer_id}"
     source = Source(title=title, url=url)
     facts = []
-    for field in FACT_LABELS:
+    for field in (*FACT_LABELS, *TASK_FACTS):
         value = getattr(offer, field)
         if value is not None:
-            facts.append(VerifiedFact(field=field, value=value, source=source))
+            facts.append(VerifiedFact(field=field, value=str(value), source=source))
     return ProductCard(
         offer_id=offer.offer_id,
         sku=offer.sku,
@@ -276,6 +334,54 @@ def _product_card(offer: Offer, match_summary: str) -> ProductCard | None:
         availability=bool(offer.available) if offer.available is not None else None,
         snapshot_at=datetime.fromisoformat(offer.source_at),
     )
+
+
+def find_task_cards(
+    index: Path,
+    expression: str,
+    *,
+    user_limit: int | None,
+    deployment: str | None,
+    budget_kopecks: int | None,
+    origin: str | None,
+) -> list[ProductCard] | None:
+    with _open_catalog(index) as db:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        if version < TASK_SCHEMA_VERSION:
+            return None
+        predicates = ["task_terms MATCH ?", "available = 1", "url IS NOT NULL"]
+        params: list[str | int] = [expression]
+        filters = (
+            ("user_limit >= ?", user_limit),
+            ("deployment = ?", deployment),
+            ("price_kopecks <= ?", budget_kopecks),
+            ("origin = ?", origin),
+        )
+        for predicate, value in filters:
+            if value is not None:
+                predicates.append(predicate)
+                params.append(value)
+        rows = db.execute(
+            f"""SELECT {OFFER_FIELDS}, edition, term, license_type, deployment, user_limit, origin, group_id
+                FROM task_terms JOIN offers ON offers.rowid = task_terms.rowid CROSS JOIN snapshot
+                WHERE {' AND '.join(predicates)}
+                ORDER BY bm25(task_terms, 3.0, 1.0), offer_id""",
+            params,
+        )
+        cards = []
+        seen_groups = set()
+        for *fields, group_id in rows:
+            if group_id and group_id in seen_groups:
+                continue
+            card = _product_card(Offer(*fields), "Найдено по терминам задачи в каталоге")
+            if card is None:
+                continue
+            cards.append(card)
+            if len(cards) == 3:
+                break
+            if group_id:
+                seen_groups.add(group_id)
+        return cards
 
 
 def _answer(text: str, cards: list[ProductCard]) -> TurnResult:
@@ -351,7 +457,7 @@ def _named_product_reply(
         return None
     with _open_catalog(index) as db:
         version = db.execute("PRAGMA user_version").fetchone()[0]
-        if version < SCHEMA_VERSION:
+        if version < NAMED_SCHEMA_VERSION:
             if explicit:
                 return TurnResult(outcome="clarify", text="Для поиска по названию нужно обновить снимок каталога. Если знаете артикул, пришлите его.")
             return None
