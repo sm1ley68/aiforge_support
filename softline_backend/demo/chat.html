@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Чат с поддержкой | Softline</title>
+  <link rel="stylesheet" href="/demo/demo.css">
+  <script src="/demo/demo.js" type="module"></script>
+</head>
+<body data-screen="chat">
+  <a href="#main" class="skip-link">К чату</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/">Softline <span>Поддержка</span></a>
+      <nav aria-label="Экраны">
+        <a href="/" aria-current="page">Чат</a>
+        <a href="/manager">Менеджер</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <div class="page-heading">
+      <h1>Чат с поддержкой</h1>
+      <button id="new-chat" class="secondary" type="button" hidden>Новый чат</button>
+    </div>
+    <section class="workspace chat" aria-labelledby="conversation-heading">
+      <h2 id="conversation-heading" class="sr-only">Переписка</h2>
+      <div id="chat-empty" class="empty">
+        <h2>Чем вам помочь?</h2>
+        <p>Напишите название продукта, артикул или задачу. Здесь же можно попросить связаться с менеджером.</p>
+        <button id="manager-example" class="secondary" type="button">Позвать менеджера</button>
+      </div>
+      <ol id="chat-messages" aria-label="Сообщения" hidden></ol>
+      <form id="chat-form" class="composer">
+        <label for="message">Сообщение</label>
+        <div class="composer-fields">
+          <textarea id="message" name="message" rows="2" maxlength="8000" required></textarea>
+          <button id="send" type="submit">Отправить</button>
+        </div>
+        <p id="chat-error" class="feedback" role="alert" hidden></p>
+        <p id="chat-announcement" class="sr-only" role="status"></p>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

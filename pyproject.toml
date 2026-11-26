@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 include = ["aisupport_ml*", "softline_backend*"]
 
 [tool.setuptools.package-data]
-softline_backend = ["schema.sql"]
+softline_backend = ["schema.sql", "demo/*.html", "demo/*.css", "demo/*.js"]
 
 [project.optional-dependencies]
 ollama = ["httpx>=0.27,<1"]

@@ -1,0 +1,8 @@
+*
+!pyproject.toml
+!README.md
+!softline_backend
+!softline_backend/**/*.py
+!softline_backend/schema.sql
+!softline_backend/demo
+!softline_backend/demo/*

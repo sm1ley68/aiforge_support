@@ -61,6 +61,19 @@ python -m softline_backend.worker
 
 Для проверки экрана менеджера задайте отдельный `MANAGER_TOKEN` в окружении API. Передавайте его в заголовке `Authorization: Bearer <manager_token>`. Запрос `GET /manager/handoffs` возвращает очередь, а `GET /manager/handoffs/{handoff_id}` возвращает карточку и историю чата. OpenAPI доступен по `/docs`.
 
+### Запуск демо
+
+Клиентский экран доступен на `/`, менеджерский на `/manager`. Введите на экране менеджера токен из окружения API. Команда ниже запускает API, worker и PostgreSQL. Укажите абсолютный путь к каталогу с собранным файлом `catalog.sqlite3`.
+
+```sh
+CATALOG_DIR=/path/to/index-directory CATALOG_INDEX_PATH=/catalog/catalog.sqlite3 \
+SOFTLINE_DOCKER_USER="$(id -u):$(id -g)" docker compose up --build
+```
+
+Доступность процесса показывает `GET /health/live`. `GET /health/ready` показывает готовность схемы БД, индекса и конфигурации Polza. Проверка провайдера использует настройки и не делает платный вызов.
+
+После сбоя клиент может повторить ход через `POST /chats/{chat_id}/turns/{turn_id}/retry` с тем же токеном. API сохраняет `turn_id` и возвращает `409`, когда последующий ход уже начал обработку. Логи worker связывают попытку, итог, длительность и использование токенов с `turn_id`.
+
 Интеграционные тесты создают отдельную временную схему для каждого теста. Укажите тестовую базу в `TEST_DATABASE_URL`.
 
 ```sh

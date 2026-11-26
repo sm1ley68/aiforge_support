@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Очередь обращений | Softline</title>
+  <link rel="stylesheet" href="/demo/demo.css">
+  <script src="/demo/demo.js" type="module"></script>
+</head>
+<body data-screen="manager">
+  <a href="#main" class="skip-link">К обращениям</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="/">Softline <span>Поддержка</span></a>
+      <nav aria-label="Экраны">
+        <a href="/">Чат</a>
+        <a href="/manager" aria-current="page">Менеджер</a>
+      </nav>
+    </div>
+  </header>
+  <main id="main">
+    <div class="page-heading">
+      <h1>Очередь обращений</h1>
+      <button id="manager-sign-out" class="secondary" type="button" hidden>Выйти</button>
+    </div>
+    <div class="workspace manager">
+      <form id="manager-login" class="login">
+        <label for="manager-token">Токен менеджера</label>
+        <div class="composer-fields">
+          <input id="manager-token" type="password" required autocomplete="off">
+          <button id="manager-sign-in" type="submit">Открыть очередь</button>
+        </div>
+        <p id="login-error" class="feedback" role="alert" hidden></p>
+      </form>
+      <div id="manager-workspace" class="manager-columns" hidden>
+        <aside class="queue" aria-labelledby="queue-heading">
+          <div class="queue-heading">
+            <h2 id="queue-heading">Обращения</h2>
+            <button id="queue-refresh" class="secondary" type="button">Обновить</button>
+          </div>
+          <p id="queue-status" role="status">Загрузка…</p>
+          <ul id="queue-list" aria-label="Список обращений"></ul>
+        </aside>
+        <section id="case-detail" class="case-detail" aria-label="Карточка обращения" tabindex="-1">
+          <p>Выберите обращение, чтобы посмотреть подробности и переписку.</p>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

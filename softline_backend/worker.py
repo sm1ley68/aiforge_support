@@ -3,7 +3,7 @@ import os
 import re
 from collections.abc import Callable
 from pathlib import Path
-from time import sleep
+from time import monotonic, sleep
 
 from psycopg import OperationalError
 
@@ -11,7 +11,7 @@ from .catalog import catalog_reply
 from .contracts import HandoffDetails, MessageView, TurnResult
 from .product_questions import product_question_reply
 from .store import ChatStore
-from .task_extraction import DEFAULT_TASK_MODEL, PolzaTaskExtractor
+from .task_extraction import DEFAULT_TASK_MODEL, PolzaTaskExtractor, extraction_turn_id
 from .task_search import task_reply
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,11 @@ def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
     if turn is None:
         return False
 
+    started = monotonic()
+    outcome = "failed"
+    logger.info("turn_claimed turn_id=%s attempt=%d", turn.turn_id, turn.attempts)
     history = store.previous_messages(turn)
+    trace = extraction_turn_id.set(str(turn.turn_id))
     try:
         if MANAGER_REQUEST.fullmatch(" ".join(turn.message_text.casefold().split())):
             result = TurnResult(
@@ -69,13 +73,18 @@ def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
         else:
             result = reply(turn.message_text, history)
     except Exception as exc:
-        logger.warning("Turn %s failed (%s)", turn.turn_id, type(exc).__name__)
+        logger.warning("turn_error turn_id=%s error=%s", turn.turn_id, type(exc).__name__)
         saved = store.finish(turn, error="processing_failed")
     else:
+        outcome = result.outcome
         saved = store.finish(turn, result=result)
+    finally:
+        extraction_turn_id.reset(trace)
 
-    if not saved:
-        logger.info("Turn %s lease expired before completion", turn.turn_id)
+    logger.info(
+        "turn_finished turn_id=%s attempt=%d outcome=%s saved=%s duration_ms=%d",
+        turn.turn_id, turn.attempts, outcome, saved, int((monotonic() - started) * 1000),
+    )
     return True
 
 

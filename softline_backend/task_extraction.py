@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Callable
+from contextvars import ContextVar
 from time import monotonic
 from typing import TYPE_CHECKING, Annotated, Literal
 
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+extraction_turn_id: ContextVar[str | None] = ContextVar('extraction_turn_id', default=None)
 ENDPOINT = "https://polza.ai/api/v1/chat/completions"
 DEFAULT_TASK_MODEL = "anthropic/claude-haiku-5.5"
 MAX_MESSAGE_CHARS = 4000
@@ -157,8 +159,9 @@ class PolzaTaskExtractor:
             status = "invalid_response"
         finally:
             logger.info(
-                "Polza task extraction status=%s duration_ms=%d prompt_tokens=%s completion_tokens=%s",
-                status, int((monotonic() - started) * 1000), prompt_tokens, completion_tokens,
+                "polza_extraction turn_id=%s status=%s duration_ms=%d prompt_tokens=%s completion_tokens=%s",
+                extraction_turn_id.get(), status, int((monotonic() - started) * 1000),
+                prompt_tokens, completion_tokens,
             )
         return result
 

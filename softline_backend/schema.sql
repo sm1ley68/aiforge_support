@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS chat_turns (
     CHECK ((status = 'failed') = (error IS NOT NULL))
 );
 
+-- Keep claim numbers monotonic across manual retries so stale workers stay fenced.
+ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS retry_attempt_base integer NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS chat_turns_history ON chat_turns (chat_id, sequence);
 CREATE INDEX IF NOT EXISTS chat_turns_pending ON chat_turns (sequence)
     WHERE status IN ('queued', 'processing');

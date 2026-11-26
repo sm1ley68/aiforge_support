@@ -1,10 +1,11 @@
+import logging
 from dataclasses import dataclass
 from hashlib import sha256
 from importlib.resources import files
 from secrets import token_urlsafe
 from uuid import UUID, uuid4
 
-from psycopg import connect
+from psycopg import Error, IsolationLevel, OperationalError, connect
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -17,6 +18,20 @@ from .contracts import (
     TurnResult,
     TurnView,
 )
+
+
+logger = logging.getLogger(__name__)
+
+CLAIMABLE_TURNS = """
+    (candidate.status = 'queued'
+     OR (candidate.status = 'processing' AND candidate.lease_until <= clock_timestamp()))
+    AND NOT EXISTS (
+        SELECT 1 FROM chat_turns AS earlier
+        WHERE earlier.chat_id = candidate.chat_id
+          AND earlier.sequence < candidate.sequence
+          AND earlier.status IN ('queued', 'processing')
+    )
+"""
 
 
 HANDOFF_ROWS = """
@@ -34,6 +49,14 @@ class MessageConflict(Exception):
     pass
 
 
+class TurnNotFound(Exception):
+    pass
+
+
+class TurnRetryConflict(Exception):
+    pass
+
+
 @dataclass(frozen=True)
 class ClaimedTurn:
     turn_id: UUID
@@ -47,8 +70,22 @@ class ChatStore:
     def __init__(self, database_url: str):
         self.database_url = database_url
 
-    def _connect(self):
-        return connect(self.database_url, row_factory=dict_row)
+    def _connect(self, **kwargs):
+        if not self.database_url:
+            raise OperationalError("DATABASE_URL is missing")
+        return connect(self.database_url, row_factory=dict_row, **kwargs)
+
+    def is_ready(self) -> bool:
+        try:
+            with self._connect(connect_timeout=2) as db:
+                db.execute("SET LOCAL statement_timeout = '2s'")
+                db.execute(
+                    "SELECT chats.token_hash, chat_turns.retry_attempt_base "
+                    "FROM chats JOIN chat_turns USING (chat_id) LIMIT 0"
+                )
+        except Error:
+            return False
+        return True
 
     def initialize(self):
         with self._connect() as db:
@@ -73,6 +110,7 @@ class ChatStore:
 
     def submit(self, chat_id: UUID, token: str, client_message_id: str, text: str) -> UUID:
         with self._connect() as db:
+            db.isolation_level = IsolationLevel.READ_COMMITTED
             self._check_access(db, chat_id, token, lock=True)
             existing = db.execute(
                 """SELECT turn_id, message_text FROM chat_turns
@@ -91,6 +129,35 @@ class ChatStore:
                 (turn_id, chat_id, client_message_id, text),
             )
             return turn_id
+
+    def retry(self, chat_id: UUID, token: str, turn_id: UUID) -> None:
+        with self._connect() as db:
+            db.isolation_level = IsolationLevel.READ_COMMITTED
+            self._check_access(db, chat_id, token, lock=True)
+            row = db.execute(
+                "SELECT status, sequence FROM chat_turns WHERE chat_id = %s AND turn_id = %s",
+                (chat_id, turn_id),
+            ).fetchone()
+            if row is None:
+                raise TurnNotFound
+            if row["status"] != "failed":
+                raise TurnRetryConflict("Only failed turns can be retried")
+
+            later = db.execute(
+                """SELECT 1 FROM chat_turns
+                   WHERE chat_id = %s AND sequence > %s AND attempts > 0
+                   LIMIT 1""",
+                (chat_id, row["sequence"]),
+            ).fetchone()
+            if later is not None:
+                raise TurnRetryConflict("A later turn has already started")
+
+            db.execute(
+                """UPDATE chat_turns
+                   SET status = 'queued', error = NULL, retry_attempt_base = attempts
+                   WHERE turn_id = %s""",
+                (turn_id,),
+            )
 
     def get_turn(self, chat_id: UUID, token: str, turn_id: UUID) -> TurnView | None:
         with self._connect() as db:
@@ -153,41 +220,51 @@ class ChatStore:
 
     def claim(self, lease_seconds: int = 60) -> ClaimedTurn | None:
         with self._connect() as db:
-            # The head turn remains a blocker even when another worker holds its row lock.
+            db.isolation_level = IsolationLevel.READ_COMMITTED
+            # Retry and claim both lock the chat before changing queue state.
             candidate = db.execute(
-                """SELECT candidate.turn_id, candidate.attempts
-                   FROM chat_turns AS candidate
-                   WHERE (candidate.status = 'queued'
-                          OR (candidate.status = 'processing' AND candidate.lease_until <= clock_timestamp()))
-                     AND NOT EXISTS (
-                         SELECT 1 FROM chat_turns AS earlier
-                         WHERE earlier.chat_id = candidate.chat_id
-                           AND earlier.sequence < candidate.sequence
-                           AND earlier.status IN ('queued', 'processing')
-                     )
-                   ORDER BY candidate.sequence
-                   LIMIT 1 FOR UPDATE OF candidate SKIP LOCKED"""
+                f"""SELECT candidate.turn_id
+                    FROM chat_turns AS candidate JOIN chats AS chat USING (chat_id)
+                    WHERE {CLAIMABLE_TURNS}
+                    ORDER BY candidate.sequence
+                    LIMIT 1 FOR UPDATE OF chat, candidate SKIP LOCKED"""
             ).fetchone()
             if candidate is None:
                 return None
-            if candidate["attempts"] >= 3:
-                db.execute(
-                    """UPDATE chat_turns
-                       SET status = 'failed', lease_until = NULL, error = 'worker_timeout'
-                       WHERE turn_id = %s""",
-                    (candidate["turn_id"],),
-                )
+
+            # A retry can commit after the candidate statement took its snapshot
+            # but before it locked the chat. Check again with a fresh snapshot.
+            candidate = db.execute(
+                f"""SELECT candidate.turn_id, candidate.attempts, candidate.retry_attempt_base
+                    FROM chat_turns AS candidate
+                    WHERE candidate.turn_id = %s AND {CLAIMABLE_TURNS}""",
+                (candidate["turn_id"],),
+            ).fetchone()
+            if candidate is None:
                 return None
 
-            row = db.execute(
+            if candidate["attempts"] - candidate["retry_attempt_base"] < 3:
+                row = db.execute(
+                    """UPDATE chat_turns
+                       SET status = 'processing', attempts = attempts + 1,
+                           lease_until = clock_timestamp() + %s * interval '1 second'
+                       WHERE turn_id = %s
+                       RETURNING turn_id, chat_id, sequence, message_text, attempts""",
+                    (lease_seconds, candidate["turn_id"]),
+                ).fetchone()
+                return ClaimedTurn(**row)
+
+            db.execute(
                 """UPDATE chat_turns
-                   SET status = 'processing', attempts = attempts + 1,
-                       lease_until = clock_timestamp() + %s * interval '1 second'
-                   WHERE turn_id = %s
-                   RETURNING turn_id, chat_id, sequence, message_text, attempts""",
-                (lease_seconds, candidate["turn_id"]),
-            ).fetchone()
-            return ClaimedTurn(**row)
+                   SET status = 'failed', lease_until = NULL, error = 'worker_timeout'
+                   WHERE turn_id = %s""",
+                (candidate["turn_id"],),
+            )
+        logger.warning(
+            "turn_attempts_exhausted turn_id=%s attempt=%s",
+            candidate["turn_id"], candidate["attempts"],
+        )
+        return None
 
     def finish(
         self, turn: ClaimedTurn, *, result: TurnResult | None = None, error: str | None = None
