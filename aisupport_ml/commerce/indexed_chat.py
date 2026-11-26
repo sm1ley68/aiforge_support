@@ -10,7 +10,7 @@ from .catalog import CatalogOffer, SoftlineCatalog
 from .contracts import CatalogContext, Source
 from .extraction import OPTIONAL_TEXT, _literal, object_schema
 from .retrieval import normalize
-from .softline_evidence import PACKAGES, PACKAGE_SOURCES, RUSSIAN_SOURCE
+from .softline_evidence import BACKUP_LICENSES, BACKUP_SOURCES, PACKAGES, PACKAGE_SOURCES, RUSSIAN_SOURCE
 
 
 INDEXED_PROMPT_VERSION = "softline-catalog-v2"
@@ -63,6 +63,32 @@ _WINDOWS_PRODUCT = re.compile(r"^(?:(?:нужен|интересует|ищу)\s
 _DEMO_GOAL = re.compile(r"^(?:не знаю[^.;?!]*, но\s+)?(?:хотим|надо|нужно)\s+(защитить почту и файлы)\b", re.I)
 _EXCHANGE = re.compile(r"\b(?:Microsoft\s+)?Exchange(?:\s+(?:Online|Server(?:\s+\d{4})?))?\b", re.I)
 _FILE_SERVER = re.compile(r"\b(?:Windows(?:\s+(?:Server(?:\s+\d{4})?|\d{1,2}))?|Linux|macOS)\b", re.I)
+_BACKUP_GOAL = re.compile(
+    r"\b(?:резервн\w*\s+(?:копирован\w*|копи[июйя])|"
+    r"резервировать\s+(?:рабочи\w*\s+)?(?:файл\w*|данн\w*|документ\w*)|б[эе]кап\w*)\b",
+    re.I,
+)
+_BACKUP_BRAND = re.compile(r"\b(?:handy\s+backup|кибер[ -]+б[эе]кап|veeam|acronis)\b", re.I)
+_BACKUP_COUNT = re.compile(
+    r"\b([1-9]\d{0,4})\s*(?:пк|ноутбук\w*|компьютер\w*|рабочи\w*\s+станци\w*|узл\w*|устройств\w*)\b",
+    re.I,
+)
+_BACKUP_LOCAL = re.compile(r"\b(?:локальн\w*|внешн\w*)\s+(?:диск\w*|накопител\w*)|\bUSB[ -]+(?:диск|накопитель)\w*|\bна флешк\w*", re.I)
+_BACKUP_FILES = re.compile(r"\b(?:файл(?:ы|ов|ами)?|папк\w*|документ\w*)\b", re.I)
+_BACKUP_IMAGE = re.compile(r"\b(?:образ\w*\s+(?:диск\w*|систем\w*)|всю систему|систему целиком|полный образ)\b", re.I)
+_NO_IMAGE = re.compile(r"\b(?:без образ\w*|образ\w*(?:\s+диск\w*)?\s+не нуж\w*)\b", re.I)
+_BACKUP_UNSUPPORTED = re.compile(
+    r"\b(?:1с|sql|postgresql|баз[уаы]\s+данных|виртуальн\w*\s+машин\w*|vmware|hyper-v|"
+    r"централизованн\w*|сетев\w*\s+хранилищ\w*|nas|linux|macos|windows server)\b",
+    re.I,
+)
+_PERPETUAL = re.compile(r"\bбессроч\w*\b", re.I)
+_BACKUP_TOPIC_CHANGE = re.compile(r"^\s*(?:вместо|забудьте|нужен\s+windows server)\b", re.I)
+_NEW_SELECTION = re.compile(
+    r"^\s*(?:(?:а|теперь|ещ[её])\s+)*(?:нуж(?:ен|на|ны|но)|интересует|ищ(?:у|ем)|хочу купить|подбер(?:и|ите))\s+",
+    re.I,
+)
+_BACKUP_REFINEMENT = re.compile(r"^(?:образ\w*|бессроч\w*|копи\w*|только|файл\w*|папк\w*|\d)", re.I)
 _TARGET_PREFIX = re.compile(r"\b(?:для|под|на базе|на платформе|в среде|совместим\w* с)\s*$", re.I)
 _PURPOSE = re.compile(r"\b(?:нуж(?:ен|на|но|ны)|ищ(?:у|ем)|хотим|подбер(?:и|ите))\s+([^,.?!]+?)\s*$", re.I)
 _GENERIC_PURPOSE = re.compile(r"^(?:антивирус|решение|программ\w*|систем\w*|защит\w*)(?:\s+\w+){0,3}$", re.I)
@@ -139,6 +165,23 @@ def direct_sku(text: str) -> str | None:
 
 def is_origin_follow_up(text: str) -> bool:
     return bool(_ORIGIN_FOLLOW_UP.fullmatch(text))
+
+
+def backup_input(text: str, context: CatalogContext | None) -> CatalogInput | None:
+    if _BACKUP_BRAND.search(text) or _BACKUP_TOPIC_CHANGE.match(text) or _DEMO_GOAL.match(text):
+        return None
+    pending = context is not None and context.mode == "need" and _BACKUP_GOAL.search(context.goal or "")
+    goal = _BACKUP_GOAL.search(text)
+    if goal:
+        return CatalogInput("continue") if pending else CatalogInput("need", goal=goal[0])
+    if (new_request := _NEW_SELECTION.match(text)) and not _BACKUP_REFINEMENT.match(text[new_request.end():]):
+        return None
+    if pending and any(pattern.search(text) for pattern in (
+        _BACKUP_FILES, _BACKUP_IMAGE, _NO_IMAGE, _BACKUP_UNSUPPORTED, _BACKUP_COUNT,
+        _FILE_SERVER, _LOCAL, _CLOUD, _BACKUP_LOCAL, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN, _TERM, _PERPETUAL,
+    )):
+        return CatalogInput("continue")
+    return None
 
 
 def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | None:
@@ -242,15 +285,35 @@ def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> 
         os_match = _FILE_SERVER.search(text)
         file_os = os_match[0] if os_match else patch.file_os
     russian_only = False if _RELAX_ORIGIN.search(text) else bool(_RUSSIAN.search(text)) or context.russian_only
-    return replace(
+    term = _months(text)
+    updated = replace(
         context,
         edition=None if _CLEAR_EDITION.search(text) else edition or context.edition,
         users=_count(_USER_COUNT, text, context.users),
         nodes=_count(_NODE_COUNT, text, context.nodes),
-        term_months=_months(text) or context.term_months,
+        term_months=term or context.term_months,
         mail=mail[0] if mail else patch.mail or context.mail,
         file_os=file_os or context.file_os,
         goal=patch.goal or context.goal, deployment=deployment, russian_only=russian_only,
+    )
+    if updated.mode != "need" or not _BACKUP_GOAL.search(updated.goal or ""):
+        return updated
+    scope = updated.backup_scope
+    if _BACKUP_UNSUPPORTED.search(text):
+        scope = "unverified"
+    elif _BACKUP_IMAGE.search(text) and not _NO_IMAGE.search(text):
+        scope = "disk_image"
+    elif _BACKUP_FILES.search(text) or _NO_IMAGE.search(text):
+        scope = "files"
+    perpetual = bool(_PERPETUAL.search(text)) or (updated.perpetual_only and term is None)
+    explicit_systems = {normalize(match[0]) for match in _FILE_SERVER.finditer(text)}
+    mixed_platforms = len(explicit_systems) > 1 and not explicit_systems <= {"windows 10", "windows 11"}
+    return replace(
+        updated, backup_scope=scope, perpetual_only=perpetual,
+        term_months=None if perpetual else updated.term_months,
+        nodes=_count(_BACKUP_COUNT, text, context.nodes),
+        file_os=None if mixed_platforms else updated.file_os,
+        deployment="local" if _BACKUP_LOCAL.search(text) and not cloud else updated.deployment,
     )
 
 
@@ -325,10 +388,70 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
                            replace(context, shown_offers=tuple(item.offer_id for item in options)), options, _sources(options))
 
 
+def _recommend_backup(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
+    windows = normalize(context.file_os or "")
+    if context.backup_scope == "unverified" or context.deployment == "cloud" or (
+        windows and windows not in {"windows", "windows 10", "windows 11"}
+    ):
+        return CatalogDecision(
+            "clarify", "В каталоге подтверждены варианты для локальных копий рабочих компьютеров Windows 10 и 11. "
+            "Для ваших требований нужен подбор с менеджером.", context,
+        )
+    if context.backup_scope is None:
+        return CatalogDecision("clarify", "Достаточно копировать файлы и папки или нужен образ всего диска?", context)
+    if windows in {"", "windows"}:
+        return CatalogDecision("clarify", "Какая версия ОС на рабочих компьютерах?", context)
+    if context.nodes is None:
+        return CatalogDecision("clarify", "Сколько компьютеров нужно резервировать?", context)
+    if context.deployment is None:
+        return CatalogDecision("clarify", "Где нужно хранить копии — на локальном накопителе или в облаке?", context)
+    if context.budget_rub is None and not context.budget_unlimited:
+        return CatalogDecision("clarify", "Какой максимальный бюджет на лицензии для всех компьютеров?", context)
+
+    candidates = []
+    for license in BACKUP_LICENSES:
+        if (license.scope != context.backup_scope or not license.min_devices <= context.nodes <= license.max_devices
+                or (context.russian_only and not license.russian_verified)
+                or (context.perpetual_only and not license.perpetual)
+                or context.term_months is not None):
+            continue
+        matches = index.by_reference(license.sku)
+        if len(matches) != 1:
+            continue
+        item, = matches
+        if (not _valid_offer(item) or item.vendor_code != license.sku or item.available is not True
+                or item.currency != "RUB" or item.price is None or item.price <= 0
+                or normalize(item.license_type or "") not in {"полная версия", "full"}
+                or (license.perpetual and not _PERPETUAL.search(item.term or ""))):
+            continue
+        total = item.price * context.nodes
+        if context.budget_rub is None or total <= context.budget_rub:
+            candidates.append((total, license.vendor, item))
+
+    if not candidates:
+        return CatalogDecision("clarify", "В текущем фиде нет подтверждённой лицензии под все требования. "
+                               "Можно уточнить бюджет или передать подбор менеджеру.", context)
+    candidates.sort(key=lambda candidate: (candidate[0], candidate[2].offer_id))
+    offers = tuple(item for _, _, item in candidates)
+    scope = "образа диска" if context.backup_scope == "disk_image" else "файлов и папок"
+    intro = f"Варианты для локального резервного копирования {scope} на {context.nodes} ПК с {context.file_os}."
+    lines = [
+        f"{item.title} ({item.vendor_code}) — {item.price:.2f} RUB за ПК, {total:.2f} RUB за {context.nodes} ПК."
+        for total, _, item in candidates
+    ]
+    sources = (*_sources(offers), *(source for vendor in dict.fromkeys(v for _, v, _ in candidates)
+                                   for source in BACKUP_SOURCES[vendor]))
+    answer = "\n".join([intro, f"Цены и наличие по фиду от {offers[0].snapshot_at}.", *lines])
+    return CatalogDecision("recommend", answer, replace(context, shown_offers=tuple(item.offer_id for item in offers)),
+                           offers, sources)
+
+
 def _recommend(index: SoftlineCatalog, context: CatalogContext, text: str) -> CatalogDecision:
     goal = normalize(context.goal or "")
     if not goal:
         return CatalogDecision("clarify", "Какую задачу нужно решить и для скольких сотрудников?", context)
+    if _BACKUP_GOAL.search(goal):
+        return _recommend_backup(index, context)
     if not (re.search(r"защит|безопасност|антивирус", goal) and "почт" in goal and "файл" in goal):
         if not context.file_os:
             return CatalogDecision("clarify", "На какой платформе будет работать решение?", context)

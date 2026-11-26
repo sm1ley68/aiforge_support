@@ -123,6 +123,8 @@ class CatalogContext:
     budget_unlimited: bool = False
     russian_only: bool = False
     shown_offers: tuple[str, ...] = ()
+    backup_scope: Literal["files", "disk_image", "unverified"] | None = None
+    perpetual_only: bool = False
 
 
 @dataclass(frozen=True)

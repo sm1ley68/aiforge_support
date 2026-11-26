@@ -55,6 +55,11 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
                           code="KL4869RAQFS"),
                 offer_xml("5058", "Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов", "11536.20",
                           code="KL4869RAQDS", term="24 мес."),
+                offer_xml("339688", "Handy Backup Standard", "3080", code="HBS10", term=""),
+                offer_xml("339675", "Handy Backup Professional", "4656", code="HBP10", term=""),
+                offer_xml("339674", "Handy Backup Professional", "4930", code="HBP4-9", term=""),
+                offer_xml("421471", "Кибер Бэкап Стандартная для рабочей станции Windows", "9066",
+                          code="PCSCNL", term="бессрочная"),
             ]
             feed.write_text(f'<yml_catalog date="2026-11-25 14:12"><shop><offers>{"".join(sample)}</offers></shop></yml_catalog>',
                             encoding="utf-8")
@@ -227,3 +232,59 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Microsoft Exchange", product.text)
         self.assertTrue(product.sources[0].url.startswith("https://store.softline.ru/kaspersky/"))
         self.assertFalse(product.trace.calls)
+
+    async def test_backup_uses_verified_licenses_for_changes_in_scope_budget_and_count(self):
+        first = await self.chat.reply("backup", "1", "Подберите решение для резервного копирования")
+        self.assertEqual(first.outcome, "clarify")
+        self.assertIn("файлы и папки", first.text)
+
+        second = await self.chat.reply("backup", "2", "Только файлы и папки, 10 компьютеров с Windows 11")
+        self.assertEqual(second.outcome, "clarify")
+        self.assertIn("локальном накопителе", second.text)
+        self.assertEqual(second.state.catalog_context.nodes, 10)
+
+        options = await self.chat.reply("backup", "3", "На внешние диски, бюджет до 100 тысяч рублей")
+        self.assertEqual(options.outcome, "recommend")
+        self.assertEqual([offer.vendor_code for offer in options.products], ["HBS10", "PCSCNL"])
+        self.assertIn("30800.00 RUB за 10 ПК", options.text)
+        self.assertIn("90660.00 RUB за 10 ПК", options.text)
+        self.assertTrue(any("handybackup.ru" in source.url for source in options.sources))
+        self.assertTrue(any("docs.cyberprotect.ru" in source.url for source in options.sources))
+        self.assertFalse(options.trace.calls)
+
+        cheaper = await self.chat.reply("backup", "4", "Бюджет до 40 тысяч рублей")
+        self.assertEqual([offer.vendor_code for offer in cheaper.products], ["HBS10"])
+        unavailable = await self.chat.reply("backup", "5", "Теперь нужен образ диска")
+        self.assertEqual(unavailable.outcome, "clarify")
+        self.assertFalse(unavailable.products)
+        self.assertFalse(unavailable.state.catalog_context.shown_offers)
+        self.assertEqual(unavailable.state.catalog_context.budget_rub, 40_000)
+
+        expanded = await self.chat.reply("backup", "6", "Бюджет до 60 тысяч рублей")
+        self.assertEqual([offer.vendor_code for offer in expanded.products], ["HBP10"])
+        self.assertIn("46560.00 RUB за 10 ПК", expanded.text)
+        fewer = await self.chat.reply("backup", "7", "В итоге 8 компьютеров")
+        self.assertEqual([offer.vendor_code for offer in fewer.products], ["HBP4-9"])
+        self.assertIn("39440.00 RUB за 8 ПК", fewer.text)
+
+        self.model.expect("named", product="MDaemon Messaging Server")
+        other = await self.chat.reply("backup", "8", "Нужен MDaemon Messaging Server под Linux")
+        self.assertEqual(other.state.catalog_context.mode, "named")
+        self.assertIsNone(other.state.catalog_context.backup_scope)
+
+    async def test_backup_preserves_required_license_and_excludes_unverified_targets(self):
+        result = await self.chat.reply(
+            "backup", "1", "Нужно резервное копирование файлов для 10 ПК с Windows 11. "
+            "Хранение локально, бюджет до 100 тысяч рублей, нужна бессрочная лицензия.",
+        )
+        self.assertEqual([offer.vendor_code for offer in result.products], ["PCSCNL"])
+        cloud = await self.chat.reply("backup", "2", "Теперь только облако")
+        self.assertEqual(cloud.outcome, "clarify")
+        self.assertFalse(cloud.products)
+        self.assertFalse(cloud.state.catalog_context.shown_offers)
+
+        unsupported = await self.chat.reply(
+            "outside", "1", "Нужны резервные копии базы данных 1С на 10 ПК с Windows 11, локально, бюджет до 100 тысяч рублей",
+        )
+        self.assertEqual(unsupported.outcome, "clarify")
+        self.assertFalse(unsupported.products)
