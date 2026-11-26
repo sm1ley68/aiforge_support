@@ -138,3 +138,13 @@ class CatalogTests(unittest.TestCase):
 
         self.assertEqual(catalog_reply(self.index, "SKU: MAIL-12").products[0].sku, "MAIL-12")
         self.assertEqual(catalog_reply(self.index, "Сравни редакции Demo Mail").outcome, "clarify")
+
+    def test_compare_offers_by_stable_id_when_sku_is_missing(self):
+        self.feed.write_bytes(FEED.replace(b"<vendorCode>MAIL-12</vendorCode>", b""))
+        build_index(self.feed, self.index)
+        compared = catalog_reply(self.index, "Сравни предложения по ID 100")
+        self.assertEqual(compared.outcome, "answer")
+        self.assertEqual([card.offer_id for card in compared.products], ["100", "101"])
+        self.assertIsNone(compared.products[0].sku)
+        missing = catalog_reply(self.index, "Сравни предложения по ID 999")
+        self.assertEqual(missing.outcome, "clarify")

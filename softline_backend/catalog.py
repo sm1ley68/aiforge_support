@@ -92,6 +92,10 @@ PRODUCT_REQUEST = re.compile(
     re.IGNORECASE,
 )
 COMPARE_REQUEST = re.compile(r"сравни(?:те)?\s+редакции\s+(.{1,240}?)\??", re.IGNORECASE)
+COMPARE_ID_REQUEST = re.compile(
+    r"сравни(?:те)?\s+(?:предложения|редакции)\s+по\s+id(?: предложения)?\s*[:№#]?\s*([\w./+:-]{1,128})\??",
+    re.IGNORECASE,
+)
 PARAMETER_NAMES = {
     "sku": "sku",
     "артикул": "sku",
@@ -637,13 +641,19 @@ def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
         return TurnResult(outcome="clarify", text="Не удалось однозначно определить семейство. Укажите точное название редакции.")
 
     group_id, offer_id = identities[0]
+    return _group_comparison(db, group_id, offer_id)
+
+
+def _group_comparison(
+    db: sqlite3.Connection, group_id: str | None, offer_id: str | None, *, preferred: str | None = None
+) -> TurnResult:
     condition, value = ("group_id", group_id) if group_id else ("offer_id", offer_id)
     version = _schema_version(db)
     fields = _offer_columns(version) if version >= EVIDENCE_SCHEMA_VERSION else f"{OFFER_FIELDS}, edition, term, license_type"
     rows = db.execute(
         f"""SELECT {fields} FROM offers CROSS JOIN snapshot
-            WHERE {condition} = ? ORDER BY offer_id LIMIT ?""",
-        (value, COMPARISON_LIMIT + 1),
+            WHERE {condition} = ? ORDER BY (offer_id = ?) DESC, offer_id LIMIT ?""",
+        (value, preferred, COMPARISON_LIMIT + 1),
     ).fetchall()
     cards = [
         card
@@ -655,14 +665,25 @@ def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
     if not cards:
         return TurnResult(outcome="clarify", text="У найденных предложений нет проверяемых ссылок. Могу передать вопрос менеджеру.")
 
-    summary = ["Параметры предложений по данным каталога:"]
+    summary = ["Параметры предложений по данным каталога"]
+    labels = FACT_LABELS | {"user_limit": "лимит пользователей"}
     for card in cards:
-        values = {fact.field: fact.value for fact in card.verified_facts if fact.field in FACT_LABELS}
-        facts = ", ".join(f"{FACT_LABELS[field]}: {value}" for field, value in values.items())
+        values = {fact.field: fact.value for fact in card.verified_facts if fact.field in labels}
+        facts = ", ".join(f"{labels[field]} — {value}" for field, value in values.items())
         summary.append(f"• {card.title} — {facts or 'редакция и условия лицензии не указаны'}")
     if len(rows) > len(cards):
         summary.append("Показана часть предложений. Уточните редакцию или срок лицензии, чтобы сузить список.")
     return _answer("\n".join(summary), cards)
+
+
+def _compare_by_offer_id(index: Path, offer_id: str) -> TurnResult:
+    with _open_catalog(index) as db:
+        if _schema_version(db) < NAMED_SCHEMA_VERSION:
+            return TurnResult(outcome="clarify", text="Для сравнения предложений нужно обновить снимок каталога.")
+        row = db.execute("SELECT group_id FROM offers WHERE offer_id = ?", (offer_id,)).fetchone()
+        if row is None:
+            return TurnResult(outcome="clarify", text=f"Предложение {offer_id} не найдено в текущем снимке.")
+        return _group_comparison(db, row[0], offer_id, preferred=offer_id)
 
 
 def _known_family_prefix(db: sqlite3.Connection, key: str) -> bool:
@@ -713,6 +734,8 @@ def catalog_reply(index: Path, text: str) -> TurnResult | None:
         return _sku_reply(index, request[1])
     if request := OFFER_ID_REQUEST.fullmatch(text):
         return _offer_id_reply(index, request[1])
+    if request := COMPARE_ID_REQUEST.fullmatch(text):
+        return _compare_by_offer_id(index, request[1])
     if request := COMPARE_REQUEST.fullmatch(text):
         return _named_product_reply(index, request[1], compare=True)
     if request := PRODUCT_REQUEST.fullmatch(text):
