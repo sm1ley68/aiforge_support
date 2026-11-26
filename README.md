@@ -61,6 +61,22 @@ python -m softline_backend.worker
 
 Для проверки экрана менеджера задайте отдельный `MANAGER_TOKEN` в окружении API. Передавайте его в заголовке `Authorization: Bearer <manager_token>`. Запрос `GET /manager/handoffs` возвращает очередь, а `GET /manager/handoffs/{handoff_id}` возвращает карточку и историю чата. OpenAPI доступен по `/docs`.
 
+### Подключение CommerceAgent
+
+Для сценариев ML используйте отдельный индекс. Формат индекса `aisupport_ml.commerce` отличается от формата `softline_backend.catalog`.
+
+~~~sh
+python -m pip install '.[backend,catalog]'
+python -m aisupport_ml.commerce.catalog /path/to/Mindbox.yml.gz.xml /path/to/commerce.sqlite3
+export COMMERCE_CATALOG_INDEX_PATH=/path/to/commerce.sqlite3
+~~~
+
+Установите `COMMERCE_CATALOG_INDEX_PATH` для API и worker. В Docker Compose используйте путь `/catalog/commerce.sqlite3` и задайте `CATALOG_DIR` равным директории индекса на хосте. При включённом CommerceAgent он обрабатывает ходы чата. Без этого параметра сохраняется режим `CATALOG_INDEX_PATH`.
+
+Worker сохраняет внутреннее состояние CommerceAgent в PostgreSQL вместе с ответом. Клиент получает карточки, текст и ссылки, менеджер получает требования и последние предложенные позиции. Для времени снимка без смещения используется UTC+03:00.
+
+Для живой Polza задайте `POLZA_API_KEY` и при необходимости `POLZA_TASK_MODEL`. Учитываются и настройки ML-модуля `LLM_API_KEY` и `LLM_MODEL`. Без ключа CommerceAgent использует ограниченный локальный разбор для демонстрационных сценариев. [Контракт и сценарии ML](docs/softline-catalog-chat.md)
+
 ### Запуск демо
 
 Клиентский экран доступен на `/`, менеджерский на `/manager`. Введите на экране менеджера токен из окружения API. Команда ниже запускает API, worker и PostgreSQL. Укажите абсолютный путь к каталогу с собранным файлом `catalog.sqlite3`.
@@ -77,7 +93,7 @@ SOFTLINE_DOCKER_USER="$(id -u):$(id -g)" docker compose up --build
 Интеграционные тесты создают отдельную временную схему для каждого теста. Укажите тестовую базу в `TEST_DATABASE_URL`.
 
 ```sh
-python -m pip install '.[backend,backend-test]'
+python -m pip install '.[backend,backend-test,catalog]'
 python -m unittest discover -s tests/backend -v
 ```
 

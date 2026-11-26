@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
+from .commerce_bridge import commerce_provider_key
 from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, TurnAccepted, TurnView
 from .readiness import ProviderStatus, catalog_status
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
@@ -35,6 +36,7 @@ def create_app(
     *,
     manager_token: str | None = None,
     catalog_index: Path | None = None,
+    commerce_index: Path | None = None,
     provider_status: ProviderStatus = "deterministic",
 ) -> FastAPI:
     app = FastAPI(title="Softline Chat API")
@@ -55,7 +57,7 @@ def create_app(
     @app.get("/health/ready", responses={503: {"description": "Dependency unavailable"}})
     def ready(response: Response):
         database = "ready" if store.is_ready() else "unavailable"
-        catalog = catalog_status(catalog_index)
+        catalog = catalog_status(commerce_index or catalog_index, commerce=commerce_index is not None)
         healthy = database == "ready" and catalog in {"ready", "unconfigured"}
         response.headers["Cache-Control"] = "no-store"
         response.status_code = 200 if healthy else 503
@@ -139,9 +141,12 @@ def create_app(
 def app_from_env() -> FastAPI:
     logging.basicConfig(level=logging.INFO)
     index_path = os.getenv("CATALOG_INDEX_PATH")
+    commerce_path = os.getenv("COMMERCE_CATALOG_INDEX_PATH", "").strip()
+    key = commerce_provider_key() if commerce_path else os.getenv("POLZA_API_KEY", "").strip()
     return create_app(
         ChatStore(os.getenv("DATABASE_URL", "")),
         manager_token=os.getenv("MANAGER_TOKEN"),
         catalog_index=Path(index_path) if index_path else None,
-        provider_status="configured" if os.getenv("POLZA_API_KEY", "").strip() else "deterministic",
+        commerce_index=Path(commerce_path) if commerce_path else None,
+        provider_status="configured" if key else "deterministic",
     )

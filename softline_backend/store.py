@@ -172,6 +172,7 @@ class ChatStore:
         result = row.pop("result") or {}
         result.pop("handoff", None)
         result.pop("catalog_selection", None)
+        result.pop("commerce_state", None)
         return TurnView(**row, **result)
 
     def list_handoffs(self, limit: int) -> list[HandoffView]:
@@ -194,6 +195,17 @@ class ChatStore:
     def previous_messages(self, turn: ClaimedTurn) -> list[MessageView]:
         with self._connect() as db:
             return self._history(db, turn.chat_id, before=turn.sequence)
+
+    def previous_commerce_state(self, turn: ClaimedTurn) -> dict | None:
+        with self._connect() as db:
+            row = db.execute(
+                """SELECT result -> 'commerce_state' AS state FROM chat_turns
+                   WHERE chat_id = %s AND sequence < %s AND status = 'succeeded'
+                     AND result ->> 'commerce_state' IS NOT NULL
+                   ORDER BY sequence DESC LIMIT 1""",
+                (turn.chat_id, turn.sequence),
+            ).fetchone()
+        return row["state"] if row is not None else None
 
     @staticmethod
     def _history(db, chat_id: UUID, before: int | None = None) -> list[MessageView]:

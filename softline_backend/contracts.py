@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, JsonValue, StringConstraints, field_validator, model_validator
 
 
 class NewChat(BaseModel):
@@ -79,6 +79,7 @@ class TurnResult(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     handoff: HandoffDetails | None = None
     catalog_selection: CatalogReference | None = None
+    commerce_state: dict[str, JsonValue] | None = None
 
     @model_validator(mode="after")
     def check_handoff(self):

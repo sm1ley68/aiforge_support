@@ -10,11 +10,19 @@ ProviderStatus = Literal["deterministic", "configured"]
 CatalogStatus = Literal["unconfigured", "ready", "unavailable", "incompatible"]
 
 
-def catalog_status(index: Path | None) -> CatalogStatus:
+def catalog_status(index: Path | None, *, commerce: bool = False) -> CatalogStatus:
     if index is None:
         return "unconfigured"
     try:
         with closing(sqlite3.connect(f"{index.absolute().as_uri()}?mode=ro", uri=True, timeout=1)) as db:
+            if commerce:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master")}
+                if not {"catalog_meta", "offers", "offers_fts"}.issubset(tables):
+                    return "incompatible"
+                if db.execute("SELECT snapshot_at FROM catalog_meta LIMIT 1").fetchone() is None:
+                    return "incompatible"
+                db.execute("SELECT offer_id, title, vendor_code FROM offers LIMIT 0")
+                return "ready"
             if db.execute("PRAGMA user_version").fetchone()[0] != EVIDENCE_SCHEMA_VERSION:
                 return "incompatible"
             if db.execute("SELECT source_at FROM snapshot LIMIT 1").fetchone() is None:

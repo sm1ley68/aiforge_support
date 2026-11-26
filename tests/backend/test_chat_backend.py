@@ -217,3 +217,57 @@ class ChatBackendTests(unittest.TestCase):
         self.assertNotIn("catalog_selection", price)
         history = self.client.get(f"{self.path}/messages", headers=self.headers).json()
         self.assertNotIn("catalog_references", history[-1])
+
+    def test_commerce_worker_restores_requirements_and_projects_manager_case(self):
+        from aisupport_ml.commerce.catalog import build_catalog
+        from softline_backend.commerce_bridge import commerce_from_env
+
+        with tempfile.TemporaryDirectory() as folder:
+            fixture = Path(folder) / "commerce.xml"
+            index = Path(folder) / "commerce.sqlite3"
+            offers = []
+            for offer_id, sku, price, months in (
+                ("5066", "KL4869RAQFS", "7691.40", 12),
+                ("5058", "KL4869RAQDS", "11536.20", 24),
+            ):
+                offers.append(
+                    f'<offer id="{offer_id}" available="true">'
+                    '<name>Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов</name>'
+                    f'<vendorCode>{sku}</vendorCode><url>https://store.softline.ru/kaspersky/-{offer_id}/</url>'
+                    f'<price>{price}</price><currencyId>RUR</currencyId>'
+                    f'<param name="Срок действия">{months} мес.</param></offer>'
+                )
+            fixture.write_text(
+                '<yml_catalog date="2026-11-25 14:12"><shop><offers>'
+                + "".join(offers) + "</offers></shop></yml_catalog>", encoding="utf-8"
+            )
+            build_catalog(fixture, index)
+            steps = (
+                ("need", "Хотим защитить почту и файлы на 50 сотрудников"),
+                ("needs", "Exchange и Windows Server 2019, локально, 50 узлов, бюджет до 650 тысяч рублей"),
+                ("origin", "А российский аналог?"),
+                ("discount", "Согласуете индивидуальную скидку?"),
+            )
+            turn_ids = []
+            with patch.dict(os.environ, COMMERCE_CATALOG_INDEX_PATH=str(index), POLZA_API_KEY="", LLM_API_KEY=""):
+                for key, question in steps:
+                    response = self.submit(key, question)
+                    self.assertEqual(response.status_code, 202)
+                    turn_ids.append(response.json()["turn_id"])
+                    # Fresh adapter each time simulates a worker restart without in-memory history.
+                    self.assertTrue(process_one(self.store, commerce=commerce_from_env()))
+
+        turns = [self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json() for turn_id in turn_ids]
+        self.assertEqual([turn["outcome"] for turn in turns], ["clarify", "recommend", "recommend", "handoff"])
+        self.assertEqual({card["sku"] for card in turns[1]["products"]}, {"KL4869RAQFS", "KL4869RAQDS"})
+        self.assertIn("384570.00 RUB за 50 узлов", turns[1]["text"])
+        self.assertTrue(any("/registry" in source["url"] for source in turns[2]["sources"]))
+        self.assertNotIn("commerce_state", turns[2])
+
+        with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
+            path = f"/manager/handoffs/{turn_ids[-1]}"
+            case = manager.get(path, headers={"Authorization": "Bearer manager-secret"}).json()
+        self.assertEqual(case["reason"], "commercial_terms")
+        self.assertEqual(case["requirements"]["nodes"], "50")
+        self.assertEqual(case["requirements"]["budget_rub"], "650000")
+        self.assertEqual(set(case["candidate_ids"]), {"5066", "5058"})

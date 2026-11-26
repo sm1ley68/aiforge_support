@@ -4,8 +4,11 @@ x-backend: &backend
   environment: &backend-env
     DATABASE_URL: postgresql://softline:softline@db:5432/softline
     CATALOG_INDEX_PATH: ${CATALOG_INDEX_PATH:-}
+    COMMERCE_CATALOG_INDEX_PATH: ${COMMERCE_CATALOG_INDEX_PATH:-}
     POLZA_API_KEY: ${POLZA_API_KEY:-}
     POLZA_TASK_MODEL: ${POLZA_TASK_MODEL:-}
+    LLM_API_KEY: ${LLM_API_KEY:-}
+    LLM_MODEL: ${LLM_MODEL:-}
   volumes:
     - type: bind
       source: ${CATALOG_DIR:-./fixtures}

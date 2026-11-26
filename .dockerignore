@@ -1,6 +1,8 @@
 *
 !pyproject.toml
 !README.md
+!aisupport_ml
+!aisupport_ml/**/*.py
 !softline_backend
 !softline_backend/**/*.py
 !softline_backend/schema.sql

@@ -8,6 +8,7 @@ from time import monotonic, sleep
 from psycopg import OperationalError
 
 from .catalog import catalog_reply
+from .commerce_bridge import CommerceBridge, commerce_from_env
 from .contracts import HandoffDetails, MessageView, TurnResult
 from .product_questions import product_question_reply
 from .store import ChatStore
@@ -53,7 +54,9 @@ def reply_from_env() -> Reply:
     return reply
 
 
-def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
+def process_one(
+    store: ChatStore, reply: Reply = demo_reply, *, commerce: CommerceBridge | None = None
+) -> bool:
     turn = store.claim()
     if turn is None:
         return False
@@ -64,7 +67,9 @@ def process_one(store: ChatStore, reply: Reply = demo_reply) -> bool:
     history = store.previous_messages(turn)
     trace = extraction_turn_id.set(str(turn.turn_id))
     try:
-        if MANAGER_REQUEST.fullmatch(" ".join(turn.message_text.casefold().split())):
+        if commerce is not None:
+            result = commerce.reply(turn, history, store.previous_commerce_state(turn))
+        elif MANAGER_REQUEST.fullmatch(" ".join(turn.message_text.casefold().split())):
             result = TurnResult(
                 outcome="handoff",
                 text="Передал ваше обращение менеджеру.",
@@ -92,9 +97,10 @@ def main():
     logging.basicConfig(level=logging.INFO)
     store = ChatStore(os.environ["DATABASE_URL"])
     reply = reply_from_env()
+    commerce = commerce_from_env()
     while True:
         try:
-            if not process_one(store, reply):
+            if not process_one(store, reply, commerce=commerce):
                 sleep(0.5)
         except OperationalError:
             logger.warning("PostgreSQL unavailable, retrying")

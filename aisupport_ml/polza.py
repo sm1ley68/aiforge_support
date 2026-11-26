@@ -14,13 +14,14 @@ class PolzaIntentModel:
 
     def __init__(
         self, client: httpx.AsyncClient, *, max_tokens: int = 256, reasoning_effort: str | None = None,
+        api_key: str | None = None, model: str | None = None,
     ):
         self.client = client
         self.max_tokens = max_tokens
         self.reasoning_effort = reasoning_effort
         self.endpoint = os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
-        self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
-        self.api_key = os.environ.get("LLM_API_KEY", "").strip()
+        self.model = model if model is not None else os.environ.get("LLM_MODEL", DEFAULT_MODEL)
+        self.api_key = (api_key if api_key is not None else os.environ.get("LLM_API_KEY", "")).strip()
         if not self.api_key:
             raise ValueError("Set LLM_API_KEY before configuring Polza.ai")
         if httpx.URL(self.endpoint).scheme != "https":
