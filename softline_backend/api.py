@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
+from .advisor_api import advisor_router
 from .commerce_bridge import commerce_provider_key
 from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, TurnAccepted, TurnView
 from .readiness import ProviderStatus, catalog_status
@@ -38,9 +39,17 @@ def create_app(
     catalog_index: Path | None = None,
     commerce_index: Path | None = None,
     provider_status: ProviderStatus = "deterministic",
+    advisor_dist: Path | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Softline Chat API")
+    app.include_router(advisor_router(store, manager_token))
     app.mount("/demo", StaticFiles(directory=demo), name="demo")
+    if advisor_dist is not None:
+        app.mount("/assets", StaticFiles(directory=advisor_dist / "assets"), name="advisor-assets")
+
+        @app.get("/advisor", include_in_schema=False)
+        def store_advisor():
+            return FileResponse(advisor_dist / "index.html", headers={"Cache-Control": "no-store"})
 
     @app.get("/", include_in_schema=False)
     def demo_chat():
@@ -143,10 +152,12 @@ def app_from_env() -> FastAPI:
     index_path = os.getenv("CATALOG_INDEX_PATH")
     commerce_path = os.getenv("COMMERCE_CATALOG_INDEX_PATH", "").strip()
     key = commerce_provider_key() if commerce_path else os.getenv("POLZA_API_KEY", "").strip()
+    advisor_path = os.getenv("STORE_ADVISOR_DIST_PATH", "").strip()
     return create_app(
         ChatStore(os.getenv("DATABASE_URL", "")),
         manager_token=os.getenv("MANAGER_TOKEN"),
         catalog_index=Path(index_path) if index_path else None,
         commerce_index=Path(commerce_path) if commerce_path else None,
         provider_status="configured" if key else "deterministic",
+        advisor_dist=Path(advisor_path) if advisor_path else None,
     )

@@ -80,7 +80,7 @@ class ChatStore:
             with self._connect(connect_timeout=2) as db:
                 db.execute("SET LOCAL statement_timeout = '2s'")
                 db.execute(
-                    "SELECT chats.token_hash, chat_turns.retry_attempt_base "
+                    "SELECT chats.token_hash, chat_turns.retry_attempt_base, chat_turns.updated_at "
                     "FROM chats JOIN chat_turns USING (chat_id) LIMIT 0"
                 )
         except Error:
@@ -154,7 +154,8 @@ class ChatStore:
 
             db.execute(
                 """UPDATE chat_turns
-                   SET status = 'queued', error = NULL, retry_attempt_base = attempts
+                   SET status = 'queued', error = NULL, retry_attempt_base = attempts,
+                       updated_at = clock_timestamp()
                    WHERE turn_id = %s""",
                 (turn_id,),
             )
@@ -174,6 +175,32 @@ class ChatStore:
         result.pop("catalog_selection", None)
         result.pop("commerce_state", None)
         return TurnView(**row, **result)
+
+    def consultation_snapshot(self, chat_id: UUID, token: str, turn_id: UUID) -> dict:
+        with self._connect() as db:
+            self._check_access(db, chat_id, token)
+            row = db.execute(
+                '''SELECT chat_id, sequence, status, result FROM chat_turns
+                   WHERE chat_id = %s AND turn_id = %s''',
+                (chat_id, turn_id),
+            ).fetchone()
+            if row is None:
+                raise TurnNotFound
+            row["messages"] = self._history(db, chat_id, before=row["sequence"] + 1)
+            return row
+
+    def recent_consultations(self, limit: int) -> list[dict]:
+        with self._connect() as db:
+            rows = db.execute(
+                '''SELECT * FROM (
+                       SELECT DISTINCT ON (chat_id) chat_id, sequence, status, result, updated_at
+                       FROM chat_turns ORDER BY chat_id, sequence DESC
+                   ) AS latest ORDER BY sequence DESC LIMIT %s''',
+                (limit,),
+            ).fetchall()
+            for row in rows:
+                row["messages"] = self._history(db, row["chat_id"], before=row["sequence"] + 1)
+            return rows
 
     def list_handoffs(self, limit: int) -> list[HandoffView]:
         with self._connect() as db:
@@ -258,7 +285,7 @@ class ChatStore:
             if candidate["attempts"] - candidate["retry_attempt_base"] < 3:
                 row = db.execute(
                     """UPDATE chat_turns
-                       SET status = 'processing', attempts = attempts + 1,
+                       SET status = 'processing', attempts = attempts + 1, updated_at = clock_timestamp(),
                            lease_until = clock_timestamp() + %s * interval '1 second'
                        WHERE turn_id = %s
                        RETURNING turn_id, chat_id, sequence, message_text, attempts""",
@@ -268,7 +295,8 @@ class ChatStore:
 
             db.execute(
                 """UPDATE chat_turns
-                   SET status = 'failed', lease_until = NULL, error = 'worker_timeout'
+                   SET status = 'failed', lease_until = NULL, error = 'worker_timeout',
+                       updated_at = clock_timestamp()
                    WHERE turn_id = %s""",
                 (candidate["turn_id"],),
             )
@@ -286,7 +314,7 @@ class ChatStore:
         with self._connect() as db:
             cursor = db.execute(
                 """UPDATE chat_turns
-                   SET status = %s, result = %s, error = %s, lease_until = NULL
+                   SET status = %s, result = %s, error = %s, lease_until = NULL, updated_at = clock_timestamp()
                    WHERE turn_id = %s AND status = 'processing' AND attempts = %s
                      AND lease_until > clock_timestamp()""",
                 (

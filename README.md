@@ -77,6 +77,19 @@ Worker сохраняет внутреннее состояние CommerceAgent 
 
 Для живой Polza задайте `POLZA_API_KEY` и при необходимости `POLZA_TASK_MODEL`. Учитываются и настройки ML-модуля `LLM_API_KEY` и `LLM_MODEL`. Без ключа CommerceAgent использует ограниченный локальный разбор для демонстрационных сценариев. [Контракт и сценарии ML](docs/softline-catalog-chat.md)
 
+### Store Advisor
+
+Соберите фронтенд с относительными адресами API и подайте сборку на тот же адрес, что и backend.
+
+~~~sh
+(cd frontend && npm ci && VITE_AGENT_API_URL=/api/consultation VITE_AGENT_REQUESTS_URL=/api/requests npm run build)
+export STORE_ADVISOR_DIST_PATH="$PWD/frontend/dist"
+~~~
+
+Для Compose используйте `STORE_ADVISOR_DIST_DIR="$PWD/frontend/dist"` и `STORE_ADVISOR_DIST_PATH=/advisor-dist`. Войдите с токеном менеджера на `/manager` и откройте `/advisor` в том же браузере. Вход создаёт HttpOnly-сессию для журнала. Журнал также принимает Bearer-токен оператора. Для Vite dev server проксируйте `/api/`, `/manager` и `/demo/` на тестовый backend или используйте собранный `/advisor` на адресе backend.
+
+`POST /api/consultation` использует существующую очередь worker. Сохраните полученный `conversationId` как непрозрачное значение. Передавайте стабильный `clientMessageId` при повторе отправки в уже открытом чате. История и условия берутся из PostgreSQL, `scenario` и `catalogProductId` пока остаются подсказками клиента. `GET /api/requests` возвращает последнее состояние недавних чатов и требует операторской авторизации.
+
 ### Запуск демо
 
 Клиентский экран доступен на `/`, менеджерский на `/manager`. Введите на экране менеджера токен из окружения API. Команда ниже запускает API, worker и PostgreSQL. Укажите абсолютный путь к каталогу с собранным файлом `catalog.sqlite3`.

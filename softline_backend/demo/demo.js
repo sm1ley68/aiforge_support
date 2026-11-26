@@ -472,14 +472,28 @@ function startManager() {
     signIn.disabled = true;
     password.value = "";
     feedback(byId("login-error"), "");
-    session = { token, refreshing: false };
-    await refresh(session);
-    signIn.disabled = false;
+    try {
+      await request("/api/operator/session", { method: "POST", token });
+      session = { token, refreshing: false };
+      await refresh(session);
+    } catch (error) {
+      const message = error.status === 401 ? "Проверьте токен менеджера." : "Не удалось войти. Попробуйте ещё раз.";
+      signOff(message);
+    } finally {
+      signIn.disabled = false;
+    }
   });
   byId("queue-refresh").addEventListener("click", () => {
     if (session) refresh(session);
   });
-  signOut.addEventListener("click", () => signOff());
+  signOut.addEventListener("click", async () => {
+    try {
+      await request("/api/operator/session", { method: "DELETE" });
+      signOff();
+    } catch {
+      queueStatus.textContent = "Не удалось завершить сеанс. Попробуйте выйти ещё раз.";
+    }
+  });
 }
 
 if (document.body.dataset.screen === "chat") startChat();

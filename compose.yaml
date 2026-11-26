@@ -10,7 +10,8 @@ x-backend: &backend
     LLM_API_KEY: ${LLM_API_KEY:-}
     LLM_MODEL: ${LLM_MODEL:-}
   volumes:
-    - type: bind
+    - &catalog-mount
+      type: bind
       source: ${CATALOG_DIR:-./fixtures}
       target: /catalog
       read_only: true
@@ -35,6 +36,13 @@ services:
     environment:
       <<: *backend-env
       MANAGER_TOKEN: ${MANAGER_TOKEN:-}
+      STORE_ADVISOR_DIST_PATH: ${STORE_ADVISOR_DIST_PATH:-}
+    volumes:
+      - *catalog-mount
+      - type: bind
+        source: ${STORE_ADVISOR_DIST_DIR:-./fixtures}
+        target: /advisor-dist
+        read_only: true
     command: ["sh", "-c", "python -m softline_backend && exec uvicorn softline_backend.api:app_from_env --factory --host 0.0.0.0"]
     ports:
       - "127.0.0.1:${PORT:-8000}:8000"

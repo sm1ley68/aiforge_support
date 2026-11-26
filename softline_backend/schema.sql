@@ -30,3 +30,5 @@ CREATE INDEX IF NOT EXISTS chat_turns_pending ON chat_turns (sequence)
 
 CREATE INDEX IF NOT EXISTS chat_turns_handoffs ON chat_turns (sequence DESC)
     WHERE status = 'succeeded' AND result ->> 'outcome' = 'handoff';
+
+ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
