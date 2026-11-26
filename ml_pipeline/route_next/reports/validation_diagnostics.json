@@ -1,0 +1,407 @@
+{
+  "n": 43,
+  "selected": "catalog_evidence_balanced",
+  "validation": {
+    "n": 43,
+    "selected": "catalog_evidence_balanced",
+    "runs": [
+      {
+        "name": "majority",
+        "train_count": null,
+        "config": {},
+        "macro_f1_supported": 0.16756756756756758,
+        "correct": 31,
+        "per_route": {
+          "find_named_product": {
+            "support": 7,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "recommend_by_need": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "answer_product_question": {
+            "support": 31,
+            "precision": 0.7209302325581395,
+            "recall": 1.0,
+            "f1": 0.8378378378378378
+          },
+          "handoff": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "clarify": {
+            "support": 3,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "confusion": [
+          [
+            0,
+            0,
+            7,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            31,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            3,
+            0,
+            0
+          ]
+        ],
+        "handoff_false_positives": 0
+      },
+      {
+        "name": "rules_v1",
+        "train_count": null,
+        "config": {},
+        "macro_f1_supported": 0.1348148148148148,
+        "correct": 16,
+        "per_route": {
+          "find_named_product": {
+            "support": 7,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "recommend_by_need": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "answer_product_question": {
+            "support": 31,
+            "precision": 0.7894736842105263,
+            "recall": 0.4838709677419355,
+            "f1": 0.6
+          },
+          "handoff": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "clarify": {
+            "support": 3,
+            "precision": 0.041666666666666664,
+            "recall": 0.3333333333333333,
+            "f1": 0.07407407407407407
+          }
+        },
+        "confusion": [
+          [
+            0,
+            0,
+            1,
+            0,
+            6
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            15,
+            0,
+            16
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            0,
+            0,
+            2,
+            0,
+            1
+          ]
+        ],
+        "handoff_false_positives": 0
+      },
+      {
+        "name": "words_v1",
+        "train_count": null,
+        "config": {},
+        "macro_f1_supported": 0.2657407407407407,
+        "correct": 21,
+        "per_route": {
+          "find_named_product": {
+            "support": 7,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "recommend_by_need": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "answer_product_question": {
+            "support": 31,
+            "precision": 0.8260869565217391,
+            "recall": 0.6129032258064516,
+            "f1": 0.7037037037037037
+          },
+          "handoff": {
+            "support": 1,
+            "precision": 0.3333333333333333,
+            "recall": 1.0,
+            "f1": 0.5
+          },
+          "clarify": {
+            "support": 3,
+            "precision": 0.07692307692307693,
+            "recall": 0.3333333333333333,
+            "f1": 0.125
+          }
+        },
+        "confusion": [
+          [
+            0,
+            0,
+            2,
+            0,
+            5
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            3,
+            19,
+            2,
+            7
+          ],
+          [
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            1,
+            1,
+            0,
+            1
+          ]
+        ],
+        "handoff_false_positives": 2
+      },
+      {
+        "name": "catalog_guard_v2",
+        "train_count": null,
+        "config": {},
+        "macro_f1_supported": 0.20067544748395813,
+        "correct": 18,
+        "per_route": {
+          "find_named_product": {
+            "support": 7,
+            "precision": 0.5,
+            "recall": 0.14285714285714285,
+            "f1": 0.2222222222222222
+          },
+          "recommend_by_need": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "answer_product_question": {
+            "support": 31,
+            "precision": 0.9375,
+            "recall": 0.4838709677419355,
+            "f1": 0.6382978723404256
+          },
+          "handoff": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "clarify": {
+            "support": 3,
+            "precision": 0.08,
+            "recall": 0.6666666666666666,
+            "f1": 0.14285714285714285
+          }
+        },
+        "confusion": [
+          [
+            1,
+            0,
+            0,
+            0,
+            6
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            0,
+            0,
+            15,
+            0,
+            16
+          ],
+          [
+            1,
+            0,
+            0,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            2
+          ]
+        ],
+        "handoff_false_positives": 0
+      },
+      {
+        "name": "catalog_evidence_balanced",
+        "train_count": null,
+        "config": {},
+        "macro_f1_supported": 0.49974937343358394,
+        "correct": 27,
+        "per_route": {
+          "find_named_product": {
+            "support": 7,
+            "precision": 0.42857142857142855,
+            "recall": 0.42857142857142855,
+            "f1": 0.42857142857142855
+          },
+          "recommend_by_need": {
+            "support": 1,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "answer_product_question": {
+            "support": 31,
+            "precision": 0.8076923076923077,
+            "recall": 0.6774193548387096,
+            "f1": 0.7368421052631579
+          },
+          "handoff": {
+            "support": 1,
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0
+          },
+          "clarify": {
+            "support": 3,
+            "precision": 0.2222222222222222,
+            "recall": 0.6666666666666666,
+            "f1": 0.3333333333333333
+          }
+        },
+        "confusion": [
+          [
+            3,
+            0,
+            4,
+            0,
+            0
+          ],
+          [
+            0,
+            0,
+            0,
+            0,
+            1
+          ],
+          [
+            4,
+            0,
+            21,
+            0,
+            6
+          ],
+          [
+            0,
+            0,
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            1,
+            0,
+            2
+          ]
+        ],
+        "handoff_false_positives": 0
+      }
+    ]
+  },
+  "length_slices": {
+    "up_to_80": {
+      "n": 18,
+      "correct": 12
+    },
+    "over_80": {
+      "n": 25,
+      "correct": 15
+    }
+  },
+  "mean_confidence_correct": 0.5217233673566546,
+  "mean_confidence_wrong": 0.39963774078420566
+}
