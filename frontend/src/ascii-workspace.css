@@ -133,70 +133,6 @@
   box-shadow: inset 0 1px rgb(255 255 255 / 7%);
 }
 
-.analytics--journal {
-  --plot-height: clamp(77px, 10.8dvh, 102px);
-  margin-bottom: var(--glass-gap);
-  padding: 0;
-  color: var(--glass-text);
-  background: transparent;
-}
-.analytics--journal .analytics-grid {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1.1fr);
-  gap: var(--glass-gap);
-  padding: 0;
-}
-.analytics--journal .metric {
-  gap: 7px;
-  padding: 11px clamp(9px, 1.2vw, 16px);
-  border: 1px solid var(--glass-edge);
-  border-radius: var(--glass-radius);
-  background: var(--glass-dark);
-  box-shadow: var(--glass-shadow);
-  backdrop-filter: blur(3px);
-}
-.analytics--journal .metric h3 { font-size: 14px; }
-.analytics--journal :is(.metric-heading > span, .metric-empty, .gauge-legend button span, .bubble-legend dt, .issue-column) {
-  color: var(--glass-muted);
-  font-size: 11px;
-}
-.analytics--journal .gauge-total {
-  bottom: 6px;
-  background: rgb(211 233 251 / 10%);
-  box-shadow: none;
-}
-.analytics--journal .gauge-total b { font-size: 15px; }
-.analytics--journal .gauge-arc--resolved { --arc-remaining: rgb(177 240 181 / 20%); }
-.analytics--journal .gauge-arc--review { --arc-remaining: rgb(255 172 154 / 20%); }
-.analytics--journal .gauge-legend strong { color: var(--request-tone); }
-.analytics--journal .gauge-legend button:hover { background: rgb(225 241 239 / 9%); }
-.analytics--journal .gauge-legend button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--request-tone) 15%, transparent);
-}
-.analytics--journal .gauge-legend strong,
-.analytics--journal .bubble-legend dd { font-size: clamp(19px, 2.05vw, 25px); }
-.analytics--journal .issue-columns {
-  grid-auto-columns: minmax(78px, 1fr);
-  align-items: start;
-  padding-top: 0;
-  scrollbar-color: #8a9fa4 transparent;
-}
-.analytics--journal .issue-column {
-  grid-template-rows: calc(var(--plot-height) + 8px) minmax(34px, auto);
-  padding: 0 1px;
-  border-radius: 6px;
-}
-.analytics--journal .issue-column[aria-pressed="true"] { background: rgb(225 241 239 / 11%); }
-.analytics--journal .issue-column-plot::after { background: var(--glass-edge); }
-.analytics--journal .issue-column-value {
-  color: var(--column-color);
-  background: #294b67;
-  box-shadow: none;
-}
-.analytics--journal .issue-column-label {
-  -webkit-line-clamp: 3;
-  font-size: 11px;
-}
-
 .workspace--nav-mono .queue {
   --muted: var(--glass-muted);
   height: auto;
@@ -247,16 +183,6 @@
 .journal-filters button[aria-pressed="true"] b {
   background: color-mix(in srgb, var(--filter-tone) 16%, transparent);
 }
-.journal-list-meta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 14px 0;
-  color: var(--glass-muted);
-  font-size: 12px;
-}
-.journal-list-meta:empty { display: none; }
 .workspace--nav-mono .queue-search {
   flex: 1 1 200px;
   width: auto;
@@ -269,36 +195,9 @@
 }
 .workspace--nav-mono .queue-search input { color: var(--glass-text); font-size: 13px; }
 .workspace--nav-mono .queue-search input::placeholder { color: var(--glass-muted); }
-.workspace--nav-mono .request-list { gap: 0; padding: 3px 6px; overflow: visible; }
-
-.workspace--nav-mono .request-row {
-  min-height: 52px;
-  grid-template-columns: 33px minmax(0, 1fr) minmax(115px, 19%) minmax(160px, auto) 18px;
-  gap: 12px;
-  padding: 6px 12px;
-  border: 1px solid transparent;
-}
-.workspace--nav-mono .request-row + .request-row { border-top-color: rgb(225 241 239 / 15%); }
-.workspace--nav-mono .request-row:hover { background: rgb(225 241 239 / 8%); }
-.workspace--nav-mono .request-main strong { font-size: clamp(13px, 1.08vw, 16px); }
-.workspace--nav-mono .request-main > span,
-.workspace--nav-mono .request-meta time { color: var(--glass-muted); font-size: 12px; }
-.workspace--nav-mono .request-meta {
-  flex-direction: row-reverse;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.workspace--nav-mono .request-meta time { font-family: var(--glass-mono); }
-.request-row-issue {
-  color: var(--glass-muted);
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-.request-row-open { color: var(--glass-muted); }
-.request-icon.status-fill--review, .request-status--review, .workspace-screen [data-status="review"] { --request-tone: #ffc0ae; }
-.request-icon.status-fill--waiting, .request-status--waiting, .workspace-screen [data-status="waiting"] { --request-tone: #dbc3f5; }
-.request-icon.status-fill--resolved, .request-status--resolved, .workspace-screen [data-status="resolved"] { --request-tone: #bbebc8; }
+.request-status--review { --request-tone: #ffc0ae; }
+.request-status--waiting { --request-tone: #dbc3f5; }
+.request-status--resolved { --request-tone: #bbebc8; }
 
 .visually-hidden {
   position: absolute;
@@ -309,7 +208,6 @@
   white-space: nowrap;
 }
 
-.workspace--nav-mono .request-row :is(.request-icon, .request-status),
 .workspace--nav-mono .thread-heading .request-status {
   color: var(--request-tone);
   background: color-mix(in srgb, var(--request-tone) 12%, transparent);
@@ -701,29 +599,11 @@ summary.request-fit-cell-row::after {
 }
 
 @media (max-width: 700px) {
-  .analytics--journal .analytics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .analytics--journal .metric--issues { grid-column: 1 / -1; }
   .journal-tools { gap: 8px; padding: 10px; }
   .workspace--nav-mono .queue-search { max-width: none; }
-  .journal-list-meta { padding-inline: 10px; }
-  .workspace--nav-mono .request-row {
-    grid-template-columns: 28px minmax(0, 1fr) auto 14px;
-    gap: 7px;
-    padding-inline: 6px;
-  }
-  .workspace--nav-mono .request-main strong { white-space: normal; overflow-wrap: anywhere; }
-  .request-row-issue { display: none; }
-  .workspace--nav-mono .request-meta {
-    flex-direction: column;
-    align-items: end;
-    gap: 3px;
-  }
-  .workspace--nav-mono .request-meta time { font-size: 11px; }
-  .workspace--nav-mono .request-row-open { width: 13px; height: 13px; }
 }
 
 @media (max-width: 480px) {
-  .analytics--journal .analytics-grid { grid-template-columns: minmax(0, 1fr); }
   .journal-filters {
     display: grid;
     width: 100%;

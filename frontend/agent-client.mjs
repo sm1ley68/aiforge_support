@@ -15,35 +15,35 @@ function normalizeResponse(response, conversationId) {
   };
 }
 
+async function postRequest(endpoint, request, signal, fetchImpl) {
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  });
+
+  if (!response.ok) {
+    const error = new Error(`Agent request failed (HTTP ${response.status}).`);
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
+}
+
 export function createAgentClient({ endpoint = '', mock, fetchImpl = globalThis.fetch } = {}) {
   return {
     async send(request, { signal } = {}) {
       signal?.throwIfAborted();
 
-      if (!endpoint) {
-        if (typeof mock !== 'function') {
-          throw new TypeError('Configure an agent endpoint or provide a mock.');
-        }
-
-        const response = await mock(request, { signal });
-        signal?.throwIfAborted();
-        return normalizeResponse(response, request.conversationId);
+      if (!endpoint && typeof mock !== 'function') {
+        throw new TypeError('Configure an agent endpoint or provide a mock.');
       }
 
-      const response = await fetchImpl(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify(request),
-        signal,
-      });
-
-      if (!response.ok) {
-        const error = new Error(`Agent request failed (HTTP ${response.status}).`);
-        error.status = response.status;
-        throw error;
-      }
-
-      const payload = await response.json();
+      const payload = endpoint
+        ? await postRequest(endpoint, request, signal, fetchImpl)
+        : await mock(request, { signal });
       signal?.throwIfAborted();
       return normalizeResponse(payload, request.conversationId);
     },

@@ -5,6 +5,11 @@ import type { OperatorRequest } from './operator-types';
 const endpoint = import.meta.env.VITE_AGENT_REQUESTS_URL?.trim();
 export const isMockQueue = !endpoint;
 
+type QueueState = {
+  requests: OperatorRequest[];
+  status: 'loading' | 'ready' | 'error';
+};
+
 function isRequestList(data: unknown): data is OperatorRequest[] {
   return Array.isArray(data) && data.every(item =>
     typeof item?.id === 'string' && typeof item.title === 'string' && typeof item.customer === 'string' &&
@@ -14,10 +19,19 @@ function isRequestList(data: unknown): data is OperatorRequest[] {
   );
 }
 
+async function fetchRequests(url: string, signal: AbortSignal) {
+  const response = await fetch(url, { signal, headers: { Accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Queue request failed (HTTP ${response.status})`);
+
+  const data: unknown = await response.json();
+  if (!isRequestList(data)) throw new TypeError('Invalid request list');
+  return data;
+}
+
 export function useOperatorQueue() {
-  const [requests, setRequests] = useState<OperatorRequest[]>(isMockQueue ? mockRequests : []);
-  const [loading, setLoading] = useState(!isMockQueue);
-  const [error, setError] = useState('');
+  const [queue, setQueue] = useState<QueueState>(() => isMockQueue
+    ? { requests: mockRequests, status: 'ready' }
+    : { requests: [], status: 'loading' });
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -25,18 +39,12 @@ export function useOperatorQueue() {
     const controller = new AbortController();
 
     async function load(url: string) {
-      setLoading(true);
-      setError('');
+      setQueue(current => ({ ...current, status: 'loading' }));
       try {
-        const response = await fetch(url, { signal: controller.signal, headers: { Accept: 'application/json' } });
-        if (!response.ok) throw new Error(`Queue request failed (HTTP ${response.status})`);
-        const data: unknown = await response.json();
-        if (!isRequestList(data)) throw new TypeError('Invalid request list');
-        if (!controller.signal.aborted) setRequests(data);
+        const requests = await fetchRequests(url, controller.signal);
+        if (!controller.signal.aborted) setQueue({ requests, status: 'ready' });
       } catch {
-        if (!controller.signal.aborted) setError('Не удалось загрузить журнал запросов.');
-      } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) setQueue(current => ({ ...current, status: 'error' }));
       }
     }
 
@@ -45,7 +53,9 @@ export function useOperatorQueue() {
   }, [attempt]);
 
   return {
-    requests, loading, error,
+    requests: queue.requests,
+    loading: queue.status === 'loading',
+    error: queue.status === 'error' ? 'Не удалось загрузить журнал запросов.' : '',
     reload: () => setAttempt(current => current + 1),
   };
 }

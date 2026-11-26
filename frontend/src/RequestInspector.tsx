@@ -1,16 +1,21 @@
 import { AppIcon } from './AppIcon';
+import type { IconName } from './AppIcon';
 import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 import type { AgentResponse, Product } from './agent-types';
 import type { OperatorRequest } from './operator-types';
-
-export type InspectorTab = 'actions' | 'products' | 'sources';
 
 const tabs = [
   { id: 'actions', label: 'Действия' },
   { id: 'products', label: 'Подбор' },
   { id: 'sources', label: 'Источники' },
 ] as const;
+
+export type InspectorTab = (typeof tabs)[number]['id'];
+
+function InspectorEmpty({ icon, size = 17, children }: { icon: IconName; size?: number; children: string }) {
+  return <p className="inspector-empty"><AppIcon name={icon} size={size} />{` ${children}`}</p>;
+}
 
 function IssueCard({ issue }: { issue: NonNullable<OperatorRequest['issue']> }) {
   return (
@@ -65,47 +70,57 @@ export function RequestConditions({ requirements }: { requirements: AgentRespons
   );
 }
 
-export function RequestContext({ response, showConditions = true }: { response: AgentResponse; showConditions?: boolean }) {
+function RequestTrace({ trace }: { trace: AgentResponse['trace'] }) {
+  return (
+    <section className="trace-panel">
+      <h3>Ход работы</h3>
+      <ol className="trace-list" role="list">
+        {trace.map((step, index) => (
+          <li key={`${step.label}-${index}`} className="trace-step">
+            <span className="trace-node" aria-hidden="true">{index + 1}</span>
+            {step.detail ? (
+              <details open={index === trace.length - 1}>
+                <summary>{step.label}</summary>
+                <p>{step.detail}</p>
+              </details>
+            ) : <span className="trace-step-label">{step.label}</span>}
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+export function RequestContext({ response: { requirements, trace }, showConditions = true }: {
+  response: AgentResponse;
+  showConditions?: boolean;
+}) {
   return (
     <>
-      {showConditions && response.requirements.length > 0 && <RequestConditions requirements={response.requirements} />}
-      {response.trace.length > 0 && (
-        <section className="trace-panel">
-          <h3>Ход работы</h3>
-          <ol className="trace-list" role="list">
-            {response.trace.map((step, index) => (
-              <li key={`${step.label}-${index}`} className="trace-step">
-                <span className="trace-node" aria-hidden="true">{index + 1}</span>
-                {step.detail ? (
-                  <details open={index === response.trace.length - 1}>
-                    <summary>{step.label}</summary>
-                    <p>{step.detail}</p>
-                  </details>
-                ) : <span className="trace-step-label">{step.label}</span>}
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
+      {showConditions && requirements.length > 0 && <RequestConditions requirements={requirements} />}
+      {trace.length > 0 && <RequestTrace trace={trace} />}
     </>
   );
 }
 
-export function RequestTabContent({ response, tab }: {
-  response: AgentResponse;
-  tab: Exclude<InspectorTab, 'actions'>;
-}) {
-  if (tab === 'products') {
-    return response.products.length ? (
-      [...response.products]
-        .sort((first, second) => Number(second.recommended) - Number(first.recommended))
-        .map((product, index) => <ProductResult key={product.id} product={product} index={index} />)
-    ) : <p className="inspector-empty"><AppIcon name="products" size={18} /> Рекомендации пока отсутствуют.</p>;
+function ProductResults({ products }: { products: AgentResponse['products'] }) {
+  if (!products.length) {
+    return <InspectorEmpty icon="products" size={18}>Рекомендации пока отсутствуют.</InspectorEmpty>;
   }
 
-  return response.sources.length ? (
+  return [...products]
+    .sort((first, second) => Number(second.recommended) - Number(first.recommended))
+    .map((product, index) => <ProductResult key={product.id} product={product} index={index} />);
+}
+
+function SourceResults({ sources }: { sources: AgentResponse['sources'] }) {
+  if (!sources.length) {
+    return <InspectorEmpty icon="sources" size={18}>Источники в ответе отсутствуют.</InspectorEmpty>;
+  }
+
+  return (
     <ul className="source-list">
-      {response.sources.map((source, index) => (
+      {sources.map((source, index) => (
         <li key={`${source.url}-${index}`}>
           <a href={source.url} target="_blank" rel="noreferrer">
             <AppIcon name="sources" size={17} /><span>{source.title}{source.label && <small>{source.label}</small>}</span>
@@ -114,7 +129,16 @@ export function RequestTabContent({ response, tab }: {
         </li>
       ))}
     </ul>
-  ) : <p className="inspector-empty"><AppIcon name="sources" size={18} /> Источники в ответе отсутствуют.</p>;
+  );
+}
+
+export function RequestTabContent({ response, tab }: {
+  response: AgentResponse;
+  tab: Exclude<InspectorTab, 'actions'>;
+}) {
+  return tab === 'products'
+    ? <ProductResults products={response.products} />
+    : <SourceResults sources={response.sources} />;
 }
 
 export function RequestInspector({ request, tab, onTab, onTest }: {
@@ -157,13 +181,13 @@ export function RequestInspector({ request, tab, onTab, onTest }: {
                 {tab === 'actions' ? (
                   <>
                     <RequestContext response={response} />
-                    {!response.trace.length && <p className="inspector-empty"><AppIcon name="actions" size={17} /> Действия пока отсутствуют.</p>}
+                    {!response.trace.length && <InspectorEmpty icon="actions">Действия пока отсутствуют.</InspectorEmpty>}
                   </>
                 ) : <RequestTabContent response={response} tab={tab} />}
               </motion.div>
             </AnimatePresence>
           </>
-        ) : <p className="inspector-empty"><AppIcon name="journal" size={17} /> Выберите запрос в журнале.</p>}
+        ) : <InspectorEmpty icon="journal">Выберите запрос в журнале.</InspectorEmpty>}
       </motion.div>
       {onTest && (
         <footer className="inspector-utilities">

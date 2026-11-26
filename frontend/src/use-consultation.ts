@@ -21,8 +21,11 @@ const empty: AgentResponse = {
 };
 
 export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}) {
-  const [response, setResponse] = useState<AgentResponse>(isDemo && seedDemo && !catalogProductId ? demoConversation : empty);
-  const [messages, setMessages] = useState<Message[]>(response.messages);
+  const [conversation, setConversation] = useState(() => {
+    const response = isDemo && seedDemo && !catalogProductId ? demoConversation : empty;
+    return { response, messages: response.messages };
+  });
+  const { response, messages } = conversation;
   const [scenario, setScenario] = useState<Scenario | null>(catalogProductId || response.conversationId ? 'known' : null);
   const [productId, setProductId] = useState(catalogProductId || undefined);
   const [draft, setDraft] = useState('');
@@ -31,7 +34,10 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
   const [session, setSession] = useState(0);
   const activeRequest = useRef<AbortController | null>(null);
 
-  useEffect(() => () => activeRequest.current?.abort(), []);
+  useEffect(() => () => {
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+  }, []);
 
   async function send(text = draft) {
     const message = text.trim();
@@ -39,8 +45,9 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
 
     const controller = new AbortController();
     const userMessage: Message = { role: 'user', content: message };
+    const pendingMessages = [...messages, userMessage];
     activeRequest.current = controller;
-    setMessages([...messages, userMessage]);
+    setConversation({ response, messages: pendingMessages });
     setDraft('');
     setError('');
     setPending(true);
@@ -59,12 +66,11 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
       const reply = next.reply || next.messages.findLast(item => item.role === 'assistant')?.content;
       if (!reply) throw new Error('Empty agent reply');
 
-      setMessages([...messages, userMessage, { role: 'assistant', content: reply }]);
-      setResponse(next);
+      setConversation({ response: next, messages: [...pendingMessages, { role: 'assistant', content: reply }] });
     } catch {
       if (controller.signal.aborted) return;
 
-      setMessages(messages);
+      setConversation(conversation);
       setDraft(current => current || message);
       setError('Ответ не загрузился. Отправьте сообщение ещё раз.');
     } finally {
@@ -78,8 +84,7 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
   function reset(nextScenario: Scenario | null = null) {
     activeRequest.current?.abort();
     activeRequest.current = null;
-    setResponse(empty);
-    setMessages([]);
+    setConversation({ response: empty, messages: empty.messages });
     setScenario(nextScenario);
     setProductId(undefined);
     setDraft('');
