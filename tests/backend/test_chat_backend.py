@@ -246,6 +246,8 @@ class ChatBackendTests(unittest.TestCase):
                 ("need", "Хотим защитить почту и файлы на 50 сотрудников"),
                 ("needs", "Exchange и Windows Server 2019, локально, 50 узлов, бюджет до 650 тысяч рублей"),
                 ("origin", "А российский аналог?"),
+                ("price", "А сколько стоит?"),
+                ("delivery", "Как я получу электронную лицензию?"),
                 ("discount", "Согласуете индивидуальную скидку?"),
             )
             turn_ids = []
@@ -258,11 +260,15 @@ class ChatBackendTests(unittest.TestCase):
                     self.assertTrue(process_one(self.store, commerce=commerce_from_env()))
 
         turns = [self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json() for turn_id in turn_ids]
-        self.assertEqual([turn["outcome"] for turn in turns], ["clarify", "recommend", "recommend", "handoff"])
+        self.assertEqual([turn["outcome"] for turn in turns], [
+            "clarify", "recommend", "recommend", "clarify", "answer", "handoff",
+        ])
         self.assertEqual({card["sku"] for card in turns[1]["products"]}, {"KL4869RAQFS", "KL4869RAQDS"})
         self.assertIn("384570.00 RUB за 50 узлов", turns[1]["text"])
         self.assertTrue(any("/registry" in source["url"] for source in turns[2]["sources"]))
         self.assertNotIn("commerce_state", turns[2])
+        self.assertIn("О каком варианте", turns[3]["text"])
+        self.assertEqual(turns[4]["sources"][0]["url"], "https://store.softline.ru/delivery_info/")
 
         with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
             path = f"/manager/handoffs/{turn_ids[-1]}"

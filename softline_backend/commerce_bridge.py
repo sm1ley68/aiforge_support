@@ -13,6 +13,7 @@ from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
 from aisupport_ml.commerce.contracts import CatalogContext, Message, State
 from aisupport_ml.commerce.retrieval import KnowledgeBase
+from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
 from aisupport_ml.contracts import IntentModel, TemporaryReadError
 from aisupport_ml.polza import DEFAULT_MODEL, PolzaIntentModel
 
@@ -90,7 +91,7 @@ def _requirements(context: CatalogContext | None) -> dict[str, str]:
 class CommerceBridge:
     def __init__(self, index_path: Path, model: IntentModel, *, provider_enabled: bool = False):
         self.agent = CommerceAgent(
-            model, knowledge=KnowledgeBase([]), catalog_index=SoftlineCatalog(index_path), model_timeout=6
+            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=6
         )
         self.provider_enabled = provider_enabled
 

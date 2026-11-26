@@ -20,7 +20,7 @@ from .extraction import (
     PROMPT_VERSION, RANK_SCHEMA, RANK_SYSTEM, SCHEMA, SYSTEM, Extraction, LineChange, parse_extraction,
 )
 from .indexed_chat import (
-    INDEXED_PROMPT_VERSION, INDEXED_SCHEMA, INDEXED_SYSTEM, CatalogInput, decide,
+    INDEXED_PROMPT_VERSION, INDEXED_SCHEMA, INDEXED_SYSTEM, CatalogInput, context_fact, decide,
     direct_sku, fallback_input, is_origin_follow_up, last_offer_sources, parse_catalog_input,
 )
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
@@ -244,6 +244,8 @@ class _Turn:
             sku = direct_sku(self.text)
             if sku is not None:
                 patch = CatalogInput("named", product=sku)
+            elif (fact := context_fact(self.text)) is not None:
+                patch = CatalogInput("fact", fact=fact)
             elif context is not None and is_origin_follow_up(self.text):
                 patch = CatalogInput("continue")
             else:

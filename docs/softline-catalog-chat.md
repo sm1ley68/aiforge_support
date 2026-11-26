@@ -14,10 +14,11 @@ from pathlib import Path
 from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import SoftlineCatalog
 from aisupport_ml.commerce.retrieval import KnowledgeBase
+from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
 
 agent = CommerceAgent(
     model,
-    knowledge=KnowledgeBase([]),
+    knowledge=KnowledgeBase(CATALOG_KNOWLEDGE),
     catalog_index=SoftlineCatalog(Path("/path/to/catalog.sqlite")),
 )
 result = await agent.reply(conversation_id, message_id, text, state=state, history=history)
@@ -26,6 +27,10 @@ result = await agent.reply(conversation_id, message_id, text, state=state, histo
 Worker передаёт доверенные `State` и `history`, затем сохраняет `result.state` и ответ по ID сообщения. Поле `State.catalog_context` хранит параметры подбора, в частности платформы, бюджет и количество узлов. Если состояние сериализуется в JSON, при чтении восстановите `CatalogContext` как вложенный объект, а `shown_offers` как кортеж. Структуры договоров/корзины старого режима не заполняются в каталожном чате.
 
 Клиент получает `outcome`, `text`, `products` и публичные `sources`. В `products` передаются исходные карточки из фида. Цены следует сериализовать строками в десятичном формате. Для пакетов с ценой за узел в тексте указаны единица и расчёт для введённого количества. `handoff` предназначен для интерфейса менеджера и содержит историю, выбранные позиции и контекст подбора.
+
+Схема `softline-catalog-v2` разделяет выбор названного товара, подбор по задаче и вопрос о факте. В запросе «Нужен антивирус для Windows» Windows сохраняется как требование к платформе. В запросе «Нужен Windows Server» это название продукта. Вопрос «А сколько стоит?» использует последнюю однозначную карточку. При нескольких вариантах агент просит артикул. Для проверенного сценария подбора агент спрашивает по одному недостающему параметру.
+
+База знаний использует проверенные ответы об электронной доставке и составе базовой лицензии Kaspersky Total Security для бизнеса. Ответ содержит ссылку на источник. Срок конкретной поставки сверяется по карточке товара. [Условия магазина](https://store.softline.ru/delivery_info/)
 
 ## Прогон по реальному фиду
 

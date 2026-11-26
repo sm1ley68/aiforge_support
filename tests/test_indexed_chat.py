@@ -6,8 +6,10 @@ from xml.sax.saxutils import escape
 
 from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import SoftlineCatalog, build_catalog
+from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.mock import MockSupport
 from aisupport_ml.commerce.retrieval import KnowledgeBase
+from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
 from aisupport_ml.contracts import TemporaryReadError, Usage
 
 
@@ -16,7 +18,7 @@ class ExtractionStub:
         self.responses = []
 
     def expect(self, action, **fields):
-        response = dict.fromkeys(("product", "edition", "goal", "mail", "file_os"))
+        response = dict.fromkeys(INDEXED_SCHEMA["properties"])
         self.responses.append({**response, "action": action, **fields})
 
     async def complete(self, system, text, schema):
@@ -95,6 +97,11 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("узлов", first.text)
         self.assertFalse(first.products)
 
+        self.model.expect("continue", mail="Exchange")
+        partial = await self.chat.reply("needs", "count", "Exchange, 50 узлов")
+        self.assertEqual(partial.text, "Какая ОС у файлового сервера?")
+        self.assertEqual(partial.state.catalog_context.nodes, 50)
+
         self.model.expect("continue", mail="Exchange", file_os="Windows Server 2019")
         options = await self.chat.reply("needs", "2", "Exchange и Windows Server 2019, локально, 50 узлов, бюджет до 650 тысяч рублей")
         self.assertEqual(options.outcome, "recommend")
@@ -147,5 +154,76 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         linux = await chat.reply("new-md", "1", "Нужен MDaemon Messaging Server на 50 пользователей под Linux")
         self.assertEqual(linux.outcome, "clarify")
         self.assertFalse(linux.products)
+        antivirus = await chat.reply("platform", "1", "Нужен антивирус для Windows")
+        self.assertEqual(antivirus.outcome, "clarify")
+        self.assertEqual(antivirus.state.catalog_context.file_os, "Windows")
+        self.assertIn("сколько устройств", antivirus.text)
+        self.assertFalse(antivirus.products)
+        windows = await chat.reply("known-windows", "1", "Нужен Windows Server 2022")
+        self.assertEqual(windows.state.catalog_context.product, "Windows Server 2022")
+        self.assertIsNone(windows.state.catalog_context.file_os)
         other = await chat.reply("different", "1", "Как автоматизировать выставление счетов?")
         self.assertEqual(other.handoff.reason, "extraction_unavailable")
+
+    async def test_platform_requirement_does_not_become_a_product(self):
+        self.model.expect("named", product="Windows")
+        needs = await self.chat.reply("platform", "1", "Нужен антивирус для Windows")
+        self.assertEqual(needs.outcome, "clarify")
+        self.assertEqual(needs.state.catalog_context.mode, "need")
+        self.assertEqual(needs.state.catalog_context.goal, "антивирус")
+        self.assertEqual(needs.state.catalog_context.file_os, "Windows")
+        self.assertIsNone(needs.state.catalog_context.product)
+        self.assertFalse(needs.products)
+
+        self.model.expect("named", product="Windows Server", file_os="Windows Server")
+        selected = await self.chat.reply("product", "1", "Нужен Windows Server")
+        self.assertEqual(selected.state.catalog_context.mode, "named")
+        self.assertEqual(selected.state.catalog_context.product, "Windows Server")
+        self.assertIsNone(selected.state.catalog_context.file_os)
+
+    async def test_bare_price_resolves_one_card_or_asks_which_one(self):
+        no_context = await self.chat.reply("price", "1", "А сколько стоит?")
+        self.assertEqual(no_context.outcome, "clarify")
+        self.assertIn("название или артикул", no_context.text)
+        self.assertFalse(no_context.trace.calls)
+
+        await self.chat.reply("price", "2", "19579")
+        price = await self.chat.reply("price", "3", "А сколько стоит?")
+        self.assertEqual(price.outcome, "answer")
+        self.assertIn("101171.00 RUB", price.text)
+        self.assertEqual([offer.offer_id for offer in price.products], ["19579"])
+        self.assertFalse(price.trace.calls)
+
+        self.model.expect("fact", fact="price")
+        unresolved = await self.chat.reply("price", "unspecified", "Какая цена Kaspersky Total Security?")
+        self.assertEqual(unresolved.outcome, "clarify")
+        self.assertFalse(unresolved.products)
+
+        self.model.expect("fact", product="19579", fact="availability")
+        fact = await self.chat.reply("fact", "1", "Доступен ли товар с кодом 19579?")
+        self.assertEqual(fact.outcome, "answer")
+        self.assertIn("наличие по фиду", fact.text)
+        self.assertEqual([source.sku for source in fact.sources], ["19579"])
+
+        self.model.expect("named", product="MDaemon Messaging Server")
+        multiple = await self.chat.reply("price", "4", "MDaemon Messaging Server на 50 пользователей")
+        self.assertGreater(len(multiple.products), 1)
+        choice = await self.chat.reply("price", "5", "А сколько стоит?")
+        self.assertEqual(choice.outcome, "clarify")
+        self.assertIn("О каком варианте", choice.text)
+        self.assertEqual(choice.state.catalog_context.shown_offers, multiple.state.catalog_context.shown_offers)
+        self.assertFalse(choice.trace.calls)
+
+    async def test_reviewed_knowledge_answers_without_a_model_call(self):
+        agent = CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=self.index)
+        delivery = await agent.reply("kb", "1", "Как я получу электронную лицензию?")
+        self.assertEqual(delivery.outcome, "answer")
+        self.assertIn("электронной почты", delivery.text)
+        self.assertEqual(delivery.sources[0].url, "https://store.softline.ru/delivery_info/")
+        self.assertFalse(delivery.trace.calls)
+
+        product = await agent.reply("kb", "2", "Kaspersky Total Security для бизнеса защищает Microsoft Exchange?")
+        self.assertEqual(product.outcome, "answer")
+        self.assertIn("Microsoft Exchange", product.text)
+        self.assertTrue(product.sources[0].url.startswith("https://store.softline.ru/kaspersky/"))
+        self.assertFalse(product.trace.calls)
