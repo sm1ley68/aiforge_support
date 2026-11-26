@@ -1,5 +1,39 @@
 # AISupportAgent ML
 
+## Softline Chat API
+
+Для запуска нужны Python 3.11+ и PostgreSQL. Укажите URL выделенной базы в `DATABASE_URL`.
+
+```sh
+python -m pip install '.[backend]'
+python -m softline_backend
+uvicorn softline_backend.api:app_from_env --factory
+```
+
+В отдельном терминале с тем же `DATABASE_URL` запустите worker.
+
+```sh
+python -m softline_backend.worker
+```
+
+1. `POST /chats` возвращает `chat_id` и `chat_token`. Передавайте токен в заголовке `Authorization: Bearer <chat_token>` во всех запросах этого чата.
+2. `POST /chats/{chat_id}/messages` принимает `{"client_message_id":"message-001","text":"Нужна защита почты"}` и возвращает `202` с `turn_id`. Повтор с теми же ID и текстом возвращает тот же ход. Изменение текста с прежним ID возвращает `409`.
+3. `GET /chats/{chat_id}/turns/{turn_id}` возвращает статус `queued`, `processing`, `succeeded` или `failed`. У успешного хода есть `outcome`, текст и массивы товаров и источников.
+4. `GET /chats/{chat_id}/messages` возвращает историю в порядке ходов.
+
+На явную просьбу позвать менеджера worker возвращает `handoff`. Остальные запросы пока получает заглушка с исходом `clarify`. Обработчик получает текущую реплику и историю предыдущих ходов.
+
+Для проверки экрана менеджера задайте отдельный `MANAGER_TOKEN` в окружении API. Передавайте его в заголовке `Authorization: Bearer <manager_token>`. Запрос `GET /manager/handoffs` возвращает очередь, а `GET /manager/handoffs/{handoff_id}` возвращает карточку и историю чата. OpenAPI доступен по `/docs`.
+
+Интеграционные тесты создают отдельную временную схему для каждого теста. Укажите тестовую базу в `TEST_DATABASE_URL`.
+
+```sh
+python -m pip install '.[backend,backend-test]'
+python -m unittest discover -s tests/backend -v
+```
+
+## Модуль расследования доставки
+
 Python 3.11+. Модуль для асинхронного worker. P0 — проверка задержки доставки и предложение `create_delivery_inquiry`.
 
 ```python

@@ -1,0 +1,118 @@
+import os
+import unittest
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+from psycopg import connect, sql
+from psycopg.conninfo import make_conninfo
+
+from softline_backend.api import create_app
+from softline_backend.contracts import TurnResult
+from softline_backend.store import ChatStore
+from softline_backend.worker import process_one
+
+
+@unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "requires PostgreSQL")
+class ChatBackendTests(unittest.TestCase):
+    def setUp(self):
+        database_url = os.environ["TEST_DATABASE_URL"]
+        schema = f"test_{uuid4().hex}"
+        with connect(database_url, autocommit=True) as db:
+            db.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        self.addCleanup(self.drop_schema, database_url, schema)
+        self.store = ChatStore(make_conninfo(database_url, options=f"-c search_path={schema}"))
+        self.store.initialize()
+        self.client = TestClient(create_app(self.store))
+        self.addCleanup(self.client.close)
+        response = self.client.post("/chats")
+        self.assertEqual(response.status_code, 201)
+        self.chat = response.json()
+        self.path = f"/chats/{self.chat['chat_id']}"
+        self.headers = {"Authorization": f"Bearer {self.chat['chat_token']}"}
+
+    @staticmethod
+    def drop_schema(database_url, schema):
+        with connect(database_url, autocommit=True) as db:
+            db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+    def submit(self, message_id, text):
+        return self.client.post(
+            f"{self.path}/messages",
+            headers=self.headers,
+            json={"client_message_id": message_id, "text": text},
+        )
+
+    def test_round_trip_and_idempotency(self):
+        response = self.submit("phone-1", "Нужна защита для 50")
+        self.assertEqual(response.status_code, 202)
+        turn_id = response.json()["turn_id"]
+        turn_url = f"{self.path}/turns/{turn_id}"
+        self.assertEqual(self.client.get(turn_url, headers=self.headers).json()["status"], "queued")
+        self.assertEqual(self.submit("phone-1", "Нужна защита для 50").json()["turn_id"], turn_id)
+        self.assertEqual(self.submit("phone-1", "Другое").status_code, 409)
+        self.assertTrue(process_one(self.store))
+        self.assertFalse(process_one(self.store))
+        turn = self.client.get(turn_url, headers=self.headers).json()
+        self.assertEqual((turn["status"], turn["outcome"]), ("succeeded", "clarify"))
+        messages = self.client.get(f"{self.path}/messages", headers=self.headers).json()
+        self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
+
+    def test_chat_access_and_fifo(self):
+        first = self.submit("first", "Первый").json()["turn_id"]
+        second = self.submit("second", "Второй").json()["turn_id"]
+        self.assertEqual(
+            self.client.get(f"{self.path}/messages", headers={"Authorization": "Bearer wrong"}).status_code,
+            404,
+        )
+        self.assertEqual(str(self.store.claim().turn_id), first)
+        self.assertIsNone(self.store.claim())
+        self.assertEqual(
+            self.client.get(f"{self.path}/turns/{second}", headers=self.headers).json()["status"], "queued"
+        )
+
+    def test_expired_worker_cannot_publish(self):
+        self.submit("first", "Нужен товар")
+        expired = self.store.claim(lease_seconds=0)
+        current = self.store.claim()
+        self.assertEqual(current.turn_id, expired.turn_id)
+        self.assertFalse(self.store.finish(expired, error="processing_failed"))
+        self.assertTrue(self.store.finish(current, error="processing_failed"))
+
+    def test_handler_receives_only_previous_turns(self):
+        self.submit("first", "Сервер на 50 пользователей")
+        second = self.submit("second", "Только локально").json()["turn_id"]
+        self.submit("third", "Третий вопрос")
+        self.assertTrue(process_one(self.store))
+
+        def reply(text, history):
+            self.assertEqual(text, "Только локально")
+            self.assertEqual([message.role for message in history], ["user", "assistant"])
+            self.assertEqual(history[0].text, "Сервер на 50 пользователей")
+            return TurnResult(outcome="answer", text="Понял: только локально.")
+
+        self.assertTrue(process_one(self.store, reply))
+        result = self.client.get(f"{self.path}/turns/{second}", headers=self.headers).json()
+        self.assertEqual((result["outcome"], result["text"]), ("answer", "Понял: только локально."))
+
+    def test_customer_request_creates_one_manager_case(self):
+        request = self.submit("handoff", "Позовите менеджера, пожалуйста.")
+        turn_id = request.json()["turn_id"]
+        self.assertEqual(self.submit("handoff", "Позовите менеджера, пожалуйста.").json()["turn_id"], turn_id)
+        self.assertTrue(process_one(self.store))
+        self.assertFalse(process_one(self.store))
+
+        result = self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+        self.assertEqual(result["outcome"], "handoff")
+        self.assertNotIn("handoff", result)
+        self.assertEqual(self.client.get("/manager/handoffs").status_code, 401)
+        self.assertEqual(self.client.get("/manager/handoffs", headers=self.headers).status_code, 403)
+
+        with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
+            headers = {"Authorization": "Bearer manager-secret"}
+            cases = manager.get("/manager/handoffs", headers=headers).json()
+            self.assertEqual(len(cases), 1)
+            self.assertEqual(cases[0]["handoff_id"], turn_id)
+            self.assertEqual(cases[0]["reason"], "customer_requested")
+            detail = manager.get(f"/manager/handoffs/{turn_id}", headers=headers).json()
+            self.assertEqual(detail["messages"][0]["text"], "Позовите менеджера, пожалуйста.")
+            self.assertEqual(detail["messages"][1]["role"], "assistant")
