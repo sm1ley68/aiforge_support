@@ -2,7 +2,7 @@ import re
 from pathlib import Path
 
 from .catalog import lookup_offer, lookup_sku, product_card
-from .contracts import CatalogReference, MessageView, ProductCard, Source, TurnResult
+from .contracts import CatalogReference, MessageView, ProductCard, Source, TurnResult, VerifiedFact
 
 
 SKU_SUFFIX = re.compile(r"\s+(?:у\s+|для\s+)?(?:sku|артикул(?:а)?)[\s:№#]+([\w][\w./+:-]{0,127})$", re.I)
@@ -15,7 +15,7 @@ QUESTIONS = {
     "user_limit": r"на сколько пользователей|сколько пользователей(?: поддерживает)?|лимит пользователей",
     "deployment": r"какое развертывание|где разворачивается|можно ли развернуть локально|он локальный",
     "origin": r"какая страна происхождения|это российский продукт|это российское решение|страна происхождения",
-    "compatibility": r"совместим(?:а|о)? (?:ли )?с .+|с .+ (?:совместим(?:а|о)?|работает)",
+    "compatibility": r"совместим(?:а|о)? (?:ли )?с (.+)|с (.+) (?:совместим(?:а|о)?|работает)",
 }
 LABELS = {
     "price": "цена",
@@ -30,7 +30,21 @@ LABELS = {
 }
 
 
-def _fact_text(card: ProductCard, field: str) -> str | None:
+def _matching_fact(card: ProductCard, field: str, question: re.Match[str]) -> VerifiedFact | None:
+    if field != "compatibility":
+        return next((item for item in card.verified_facts if item.field == field), None)
+    target = (question[1] or question[2]).strip()
+    return next(
+        (
+            item
+            for item in card.verified_facts
+            if item.field == field and item.value.casefold().replace("ё", "е") == target
+        ),
+        None,
+    )
+
+
+def _fact_text(card: ProductCard, field: str, fact: VerifiedFact | None) -> str | None:
     snapshot = card.snapshot_at.strftime("%d.%m.%Y")
     if field == "price":
         if card.price_amount is not None and card.currency:
@@ -42,7 +56,6 @@ def _fact_text(card: ProductCard, field: str) -> str | None:
             return f"По снимку от {snapshot} товар «{card.title}» {status}."
         return None
 
-    fact = next((item for item in card.verified_facts if item.field == field), None)
     if fact:
         return f"По данным каталога у «{card.title}» {LABELS[field]} — {fact.value}."
     return None
@@ -54,8 +67,11 @@ def product_question_reply(index: Path, text: str, history: list[MessageView]) -
     if sku_match:
         question = question[:sku_match.start()]
     normalized = question.casefold().replace("ё", "е").removeprefix("а ")
-    field = next((name for name, pattern in QUESTIONS.items() if re.fullmatch(pattern, normalized)), None)
-    if field is None:
+    for field, pattern in QUESTIONS.items():
+        question_match = re.fullmatch(pattern, normalized)
+        if question_match is not None:
+            break
+    else:
         return None
 
     if sku_match:
@@ -82,9 +98,10 @@ def product_question_reply(index: Path, text: str, history: list[MessageView]) -
     if card is None:
         return TurnResult(outcome="clarify", text="В актуальном снимке у товара нет проверяемой ссылки. Могу передать вопрос менеджеру.")
 
-    source = Source(title=card.title, url=card.url)
+    fact = _matching_fact(card, field, question_match)
+    source = fact.source if fact is not None else Source(title=card.title, url=card.url)
     selection = CatalogReference(offer_id=card.offer_id, sku=card.sku, title=card.title)
-    answer = _fact_text(card, field)
+    answer = _fact_text(card, field, fact)
     if answer is None:
         return TurnResult(
             outcome="clarify",

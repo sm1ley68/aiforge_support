@@ -1,28 +1,38 @@
 import argparse
 import gzip
+import json
 import re
 import sqlite3
 import tempfile
+from collections import Counter
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from hashlib import file_digest
 from pathlib import Path
 from xml.etree.ElementTree import ParseError
 
-from defusedxml.ElementTree import iterparse
+from defusedxml.ElementTree import DefusedXMLParser, iterparse
 from defusedxml.common import DefusedXmlException
-from pydantic import HttpUrl, TypeAdapter, ValidationError
-
 from .contracts import ProductCard, Source, TurnResult, VerifiedFact
+from .knowledge import (
+    KNOWLEDGE_FIELDS,
+    OFFER_FACT_FIELDS,
+    SUPPLEMENTAL_FIELDS,
+    import_knowledge,
+    insert_evidence,
+    normalized_value,
+    validated_url,
+)
 
 
 NAMED_SCHEMA_VERSION = 2
 TASK_SCHEMA_VERSION = 3
+EVIDENCE_SCHEMA_VERSION = 4
 COMPARISON_LIMIT = 5
 SCHEMA = f"""
-PRAGMA user_version = {TASK_SCHEMA_VERSION};
+PRAGMA user_version = {EVIDENCE_SCHEMA_VERSION};
 CREATE TABLE snapshot (
     sha256 TEXT NOT NULL,
     source_at TEXT NOT NULL
@@ -55,6 +65,20 @@ CREATE INDEX offers_sku ON offers (sku_key);
 CREATE INDEX offers_title ON offers (title_key);
 CREATE INDEX offers_family ON offers (family_key);
 CREATE INDEX offers_group ON offers (group_id, offer_id);
+CREATE TABLE offer_evidence (
+    offer_id TEXT NOT NULL REFERENCES offers (offer_id),
+    field TEXT NOT NULL,
+    value TEXT NOT NULL,
+    source_url TEXT NOT NULL,
+    source_title TEXT NOT NULL,
+    PRIMARY KEY (offer_id, field, value, source_url)
+) WITHOUT ROWID;
+CREATE INDEX offer_evidence_field ON offer_evidence (field, value, offer_id);
+CREATE TEMP TABLE feed_field_conflicts (
+    offer_id TEXT NOT NULL,
+    field TEXT NOT NULL,
+    PRIMARY KEY (offer_id, field)
+) WITHOUT ROWID;
 """
 
 SKU_REQUEST = re.compile(
@@ -62,13 +86,12 @@ SKU_REQUEST = re.compile(
     r"([\w][\w./+:-]{0,127})[?]?",
     re.IGNORECASE,
 )
+OFFER_ID_REQUEST = re.compile(r"id\s+предложения[\s:№#]+([\w][\w./+:-]{0,127})[?]?", re.IGNORECASE)
 PRODUCT_REQUEST = re.compile(
     r"(?P<command>нужен|нужна|нужно|найди(?:те)? продукт)\s+(?P<name>.{1,240}?)\??",
     re.IGNORECASE,
 )
 COMPARE_REQUEST = re.compile(r"сравни(?:те)?\s+редакции\s+(.{1,240}?)\??", re.IGNORECASE)
-HTTP_URL = TypeAdapter(HttpUrl)
-
 PARAMETER_NAMES = {
     "sku": "sku",
     "артикул": "sku",
@@ -82,6 +105,7 @@ PARAMETER_NAMES = {
     "license term": "term",
     "срок лицензии": "term",
     "срок действия лицензии": "term",
+    "срок действия": "term",
     "license type": "license_type",
     "тип лицензии": "license_type",
     "deployment": "deployment",
@@ -90,12 +114,18 @@ PARAMETER_NAMES = {
     "user limit": "user_limit",
     "количество пользователей": "user_limit",
     "максимум пользователей": "user_limit",
+    "к-во пользователей до": "user_limit",
     "country of origin": "origin",
     "страна происхождения": "origin",
+    "capability": "capability",
+    "возможность": "capability",
+    "license quantity": "license_quantity",
+    "количество пользователей в лицензии": "license_quantity",
+    "price basis": "price_basis",
+    "единица цены": "price_basis",
 }
 
 FACT_LABELS = {"edition": "редакция", "term": "срок лицензии", "license_type": "тип лицензии"}
-TASK_FACTS = ("deployment", "user_limit", "origin")
 OFFER_FIELDS = "offer_id, sku, title, url, price, currency, available, source_at"
 
 
@@ -105,6 +135,7 @@ class Snapshot:
     source_at: datetime
     offer_count: int
     missing_id_count: int
+    coverage: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -123,6 +154,14 @@ class Offer:
     deployment: str | None = None
     user_limit: int | None = None
     origin: str | None = None
+    evidence: tuple[VerifiedFact, ...] = ()
+
+
+class MindboxXMLParser(DefusedXMLParser):
+    def defused_start_doctype_decl(self, name, sysid, pubid, has_internal_subset):
+        # Permit the standard Mindbox header; the parser still forbids entities and external references.
+        if (name, sysid, pubid, has_internal_subset) != ("yml_catalog", "shops.dtd", None, False):
+            super().defused_start_doctype_decl(name, sysid, pubid, has_internal_subset)
 
 
 def _name_key(value: str | None) -> str | None:
@@ -152,7 +191,8 @@ def _validated_price(value: str | None, currency: str | None) -> tuple[str | Non
         return None, None
     if not price.is_finite() or price < 0:
         return None, None
-    return str(price), currency.upper()
+    code = currency.upper()
+    return str(price), "RUB" if code == "RUR" else code
 
 
 def _price_kopecks(price: str | None, currency: str | None) -> int | None:
@@ -165,7 +205,9 @@ def _price_kopecks(price: str | None, currency: str | None) -> int | None:
     return int(rounded * 100) if rounded == rubles else None
 
 
-def _offer_row(offer, offer_id: str) -> tuple:
+def _offer_row(
+    offer, offer_id: str, unmapped: Counter[str] | None
+) -> tuple[tuple, list[str], dict[str, set[str]]]:
     fields = {}
     params: dict[str, set[str]] = {}
     for child in offer:
@@ -174,39 +216,45 @@ def _offer_row(offer, offer_id: str) -> tuple:
         if not value:
             continue
         if tag == "param":
-            key = PARAMETER_NAMES.get(child.attrib.get("name", "").strip().casefold().replace("ё", "е"))
+            name = " ".join(child.attrib.get("name", "").casefold().replace("ё", "е").split())
+            key = PARAMETER_NAMES.get(name)
             if key:
                 params.setdefault(key, set()).add(value)
+            elif unmapped is not None and 0 < len(name) <= 120:
+                unmapped[name] += 1
         else:
             fields.setdefault(tag, value)
 
-    known = {key: next(iter(values)) for key, values in params.items() if len(values) == 1}
+    known = {}
+    conflicts = []
+    supplemental = {}
+    for field, values in params.items():
+        if field in KNOWLEDGE_FIELDS:
+            values = {normalized_value(field, value) for value in values}
+            if field == "capability":
+                supplemental[field] = values - {None}
+                continue
+            if len(values) != 1 or None in values:
+                conflicts.append(field)
+                continue
+        if len(values) == 1:
+            value = next(iter(values))
+            if field in SUPPLEMENTAL_FIELDS:
+                supplemental[field] = {value}
+            else:
+                known[field] = value
     sku = fields.get("vendorCode") or known.get("sku")
     title = fields.get("name") or fields.get("model")
+    group_ids = {offer.attrib.get("group_id", "").strip(), fields.get("group_id", "")} - {""}
     raw_available = offer.attrib.get("available", "").strip().casefold()
     available = {"true": 1, "false": 0, "1": 1, "0": 0}.get(raw_available)
     price, currency = _validated_price(fields.get("price"), fields.get("currencyId"))
-    deployment = {
-        "on-premise": "локально",
-        "on-premises": "локально",
-        "on-prem": "локально",
-        "локально": "локально",
-        "локальное": "локально",
-        "cloud": "облако",
-        "облако": "облако",
-        "облачное": "облако",
-    }.get((known.get("deployment") or "").casefold())
-    users = known.get("user_limit", "")
-    user_limit = int(users) if re.fullmatch(r"[1-9][0-9]{0,6}", users) else None
-    origin = known.get("origin")
-    if origin and origin.casefold() in {"ru", "rus", "russia", "russian federation", "рф", "россия", "российская федерация"}:
-        origin = "Россия"
     description = re.sub(r"<[^>]+>", " ", fields.get("description", ""))
     return (
         offer_id,
         sku,
         sku.casefold() if sku else None,
-        offer.attrib.get("group_id", "").strip() or None,
+        next(iter(group_ids)) if len(group_ids) == 1 else None,
         title,
         _name_key(title),
         _name_key(known.get("family")),
@@ -218,14 +266,16 @@ def _offer_row(offer, offer_id: str) -> tuple:
         currency,
         available,
         description,
-        deployment,
-        user_limit,
-        origin,
+        known.get("deployment"),
+        int(known["user_limit"]) if "user_limit" in known else None,
+        known.get("origin"),
         _price_kopecks(price, currency),
-    )
+    ), conflicts, supplemental
 
 
-def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> Snapshot:
+def _load_feed(
+    db: sqlite3.Connection, source: Path, source_at: str | None, unmapped: Counter[str] | None
+) -> Snapshot:
     with source.open("rb") as raw:
         digest = file_digest(raw, "sha256").hexdigest()
         raw.seek(0)
@@ -233,7 +283,8 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
         raw.seek(0)
         parsed = gzip.GzipFile(fileobj=raw) if compressed else raw
         with parsed:
-            events = iterparse(parsed, events=("start", "end"), forbid_dtd=True)
+            parser = MindboxXMLParser(forbid_dtd=True, forbid_entities=True, forbid_external=True)
+            events = iterparse(parsed, events=("start", "end"), parser=parser)
             _, root = next(events)
             if _tag(root) != "yml_catalog":
                 raise ValueError("Expected a YML catalog")
@@ -250,10 +301,22 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
                     continue
                 offer_id = element.attrib.get("id", "").strip()
                 if offer_id:
+                    row, conflicts, supplemental = _offer_row(element, offer_id, unmapped)
                     db.execute(
                         "INSERT INTO offers VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        _offer_row(element, offer_id),
+                        row,
                     )
+                    if conflicts:
+                        db.executemany(
+                            "INSERT INTO feed_field_conflicts VALUES (?, ?)",
+                            [(offer_id, field) for field in conflicts],
+                        )
+                    if supplemental:
+                        title, url = row[4], validated_url(row[10])
+                        if url is not None:
+                            for field, values in supplemental.items():
+                                for value in values:
+                                    insert_evidence(db, offer_id, field, value, str(url), title or offer_id)
                     inserted += 1
                 else:
                     skipped += 1
@@ -269,10 +332,47 @@ def _load_feed(db: sqlite3.Connection, source: Path, source_at: str | None) -> S
     return Snapshot(digest, timestamp, inserted, skipped)
 
 
-def build_index(source: Path, destination: Path, *, source_at: str | None = None) -> Snapshot:
+def _coverage_counts(db: sqlite3.Connection) -> dict:
+    columns = (
+        "sku", "title", "family_key", "group_id", "price", "available", *OFFER_FACT_FIELDS,
+    )
+    conditions = (
+        *(f"{name} IS NOT NULL" for name in columns),
+        "price_kopecks IS NOT NULL",
+        "available = 1",
+        "description <> ''",
+    )
+    counts = db.execute(f"SELECT {', '.join(f'COUNT(NULLIF({condition}, 0))' for condition in conditions)} FROM offers")
+    fields = (*columns, "rub_price", "in_stock", "description")
+    result = dict(zip(fields, counts.fetchone()))
+    result.update(dict.fromkeys((*SUPPLEMENTAL_FIELDS, "compatibility"), 0))
+    result.update(db.execute(
+        """SELECT field, COUNT(DISTINCT offer_id) FROM offer_evidence
+           WHERE field IN ('capability', 'license_quantity', 'price_basis', 'compatibility')
+           GROUP BY field"""
+    ))
+    result["verifiable_url"] = sum(
+        validated_url(url) is not None for (url,) in db.execute("SELECT url FROM offers WHERE url IS NOT NULL")
+    )
+    result["ambiguous_sku_keys"] = db.execute(
+        "SELECT COUNT(*) FROM (SELECT sku_key FROM offers WHERE sku_key IS NOT NULL GROUP BY sku_key HAVING COUNT(*) > 1)"
+    ).fetchone()[0]
+    return result
+
+
+def build_index(
+    source: Path,
+    destination: Path,
+    *,
+    source_at: str | None = None,
+    knowledge: Path | None = None,
+    coverage: bool = False,
+) -> Snapshot:
     """Build and validate the index before replacing the catalog visible to workers."""
     if source.resolve() == destination.resolve():
         raise ValueError("The source feed and SQLite destination must differ")
+    if knowledge is not None and knowledge.resolve() == destination.resolve():
+        raise ValueError("The knowledge manifest and SQLite destination must differ")
     with tempfile.NamedTemporaryFile(
         prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent, delete=False
     ) as file:
@@ -280,7 +380,23 @@ def build_index(source: Path, destination: Path, *, source_at: str | None = None
     try:
         with closing(sqlite3.connect(temporary)) as db, db:
             db.executescript(SCHEMA)
-            snapshot = _load_feed(db, source, source_at)
+            unmapped = Counter() if coverage else None
+            snapshot = _load_feed(db, source, source_at, unmapped)
+            feed_counts = _coverage_counts(db) if coverage else None
+            if knowledge is not None:
+                import_knowledge(db, knowledge)
+            if coverage:
+                problem_counts = dict(db.execute("SELECT field, COUNT(*) FROM feed_field_conflicts GROUP BY field"))
+                snapshot = replace(snapshot, coverage={
+                    "offer_count": snapshot.offer_count,
+                    "missing_id_count": snapshot.missing_id_count,
+                    "source_at": snapshot.source_at.isoformat(),
+                    "sha256": snapshot.sha256,
+                    "feed": feed_counts,
+                    "effective": _coverage_counts(db) if knowledge is not None else feed_counts,
+                    "unusable_feed_fields": problem_counts,
+                    "unmapped_parameter_names": dict(unmapped.most_common(50)),
+                })
         temporary.replace(destination)
     except sqlite3.IntegrityError as exc:
         raise ValueError("The catalog contains duplicate offer IDs") from exc
@@ -296,8 +412,11 @@ def _open_catalog(index: Path):
     return closing(sqlite3.connect(uri, uri=True))
 
 
-def _offer_columns(db: sqlite3.Connection) -> str:
-    version = db.execute("PRAGMA user_version").fetchone()[0]
+def _schema_version(db: sqlite3.Connection) -> int:
+    return db.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _offer_columns(version: int) -> str:
     fields = OFFER_FIELDS
     if version >= NAMED_SCHEMA_VERSION:
         fields += ", edition, term, license_type"
@@ -306,38 +425,55 @@ def _offer_columns(db: sqlite3.Connection) -> str:
     return fields
 
 
+def _offer_with_evidence(db: sqlite3.Connection, version: int, row) -> Offer:
+    offer = Offer(*row)
+    if version < EVIDENCE_SCHEMA_VERSION:
+        return offer
+    rows = db.execute(
+        """SELECT field, value, source_url, source_title FROM offer_evidence
+           WHERE offer_id = ? ORDER BY field, value, source_url""",
+        (offer.offer_id,),
+    )
+    return replace(offer, evidence=tuple(
+        VerifiedFact(field=field, value=value, source=Source(title=title, url=url))
+        for field, value, url, title in rows
+    ))
+
+
 def lookup_sku(index: Path, sku: str) -> list[Offer]:
     with _open_catalog(index) as db:
-        fields = _offer_columns(db)
+        version = _schema_version(db)
+        fields = _offer_columns(version)
         rows = db.execute(
             f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE sku_key = ? LIMIT 2",
             (sku.strip().casefold(),),
         )
-        return [Offer(*row) for row in rows]
+        return [_offer_with_evidence(db, version, row) for row in rows]
 
 
 def lookup_offer(index: Path, offer_id: str) -> Offer | None:
     with _open_catalog(index) as db:
-        fields = _offer_columns(db)
+        version = _schema_version(db)
+        fields = _offer_columns(version)
         row = db.execute(
             f"SELECT {fields} FROM offers CROSS JOIN snapshot WHERE offer_id = ?",
             (offer_id,),
         ).fetchone()
-        return Offer(*row) if row is not None else None
+        return _offer_with_evidence(db, version, row) if row is not None else None
 
 
 def product_card(offer: Offer, match_summary: str) -> ProductCard | None:
-    try:
-        url = HTTP_URL.validate_python(offer.url)
-    except ValidationError:
+    url = validated_url(offer.url)
+    if url is None:
         return None
 
     title = offer.title or offer.sku or f"Предложение {offer.offer_id}"
     source = Source(title=title, url=url)
-    facts = []
-    for field in (*FACT_LABELS, *TASK_FACTS):
+    facts = list(offer.evidence)
+    documented = {fact.field for fact in facts}
+    for field in OFFER_FACT_FIELDS:
         value = getattr(offer, field)
-        if value is not None:
+        if value is not None and field not in documented:
             facts.append(VerifiedFact(field=field, value=str(value), source=source))
     return ProductCard(
         offer_id=offer.offer_id,
@@ -363,7 +499,7 @@ def find_task_cards(
     origin: str | None,
 ) -> list[ProductCard] | None:
     with _open_catalog(index) as db:
-        version = db.execute("PRAGMA user_version").fetchone()[0]
+        version = _schema_version(db)
         if version < TASK_SCHEMA_VERSION:
             return None
         predicates = ["task_terms MATCH ?", "available = 1", "url IS NOT NULL"]
@@ -390,7 +526,8 @@ def find_task_cards(
         for *fields, group_id in rows:
             if group_id and group_id in seen_groups:
                 continue
-            card = product_card(Offer(*fields), "Найдено по терминам задачи в каталоге")
+            offer = _offer_with_evidence(db, version, fields)
+            card = product_card(offer, "Найдено по терминам задачи в каталоге")
             if card is None:
                 continue
             cards.append(card)
@@ -401,12 +538,69 @@ def find_task_cards(
         return cards
 
 
+def find_verified_task_offers(
+    index: Path,
+    *,
+    capabilities: tuple[str, ...],
+    user_limit: int | None,
+    deployment: str | None,
+    origin: str | None,
+) -> list[ProductCard] | None:
+    """Return available offers with at least one of the requested explicit capabilities."""
+    with _open_catalog(index) as db:
+        version = _schema_version(db)
+        if version < EVIDENCE_SCHEMA_VERSION:
+            return None
+        if not capabilities:
+            return []
+        placeholders = ", ".join("?" for _ in capabilities)
+        predicates = ["available = 1", "url IS NOT NULL"]
+        params: list[str | int] = list(capabilities)
+        for field, value in (("user_limit", user_limit), ("deployment", deployment), ("origin", origin)):
+            if value is not None:
+                operator = ">=" if field == "user_limit" else "="
+                predicates.append(f"{field} {operator} ?")
+                params.append(value)
+        rows = db.execute(
+            f"""WITH eligible AS (
+                    SELECT DISTINCT offers.offer_id, evidence.value AS capability, price_kopecks
+                    FROM offer_evidence AS evidence JOIN offers ON offers.offer_id = evidence.offer_id
+                    WHERE evidence.field = 'capability' AND evidence.value IN ({placeholders})
+                    AND {' AND '.join(predicates)}
+                ), ranked AS (
+                    SELECT offer_id, ROW_NUMBER() OVER (
+                        PARTITION BY capability ORDER BY price_kopecks IS NULL, price_kopecks, offer_id
+                    ) AS rank
+                    FROM eligible
+                ), candidates AS (
+                    SELECT offer_id AS candidate_id, MIN(rank) AS rank FROM ranked GROUP BY offer_id
+                )
+                SELECT {_offer_columns(version)} FROM candidates
+                JOIN offers ON offers.offer_id = candidate_id CROSS JOIN snapshot
+                ORDER BY rank, price_kopecks IS NULL, price_kopecks, offers.offer_id""",
+            params,
+        )
+        cards = []
+        for row in rows:
+            offer = _offer_with_evidence(db, version, row)
+            card = product_card(offer, "Подтверждённая возможность для задачи")
+            if card is not None:
+                cards.append(card)
+            if len(cards) == 24:
+                break
+        return cards
+
+
 def _answer(text: str, cards: list[ProductCard]) -> TurnResult:
+    sources = {card.url: Source(title=card.title, url=card.url) for card in cards}
+    for card in cards:
+        for fact in card.verified_facts:
+            sources.setdefault(fact.source.url, fact.source)
     return TurnResult(
         outcome="answer",
         text=text,
         products=cards,
-        sources=[Source(title=card.title, url=card.url) for card in cards],
+        sources=list(sources.values()),
     )
 
 
@@ -423,6 +617,16 @@ def _sku_reply(index: Path, sku: str) -> TurnResult:
     return _answer(f"Нашёл карточку по артикулу {card.sku}. Данные о цене и наличии относятся к снимку каталога.", [card])
 
 
+def _offer_id_reply(index: Path, offer_id: str) -> TurnResult:
+    offer = lookup_offer(index, offer_id)
+    if offer is None:
+        return TurnResult(outcome="clarify", text=f"Предложение {offer_id} не найдено в текущем снимке. Проверьте его ID.")
+    card = product_card(offer, "Точное совпадение ID предложения в каталоге")
+    if card is None:
+        return TurnResult(outcome="clarify", text=f"Для предложения {offer_id} в каталоге нет проверяемой ссылки.")
+    return _answer(f"Нашёл карточку предложения {offer_id}. Данные о цене и наличии относятся к снимку каталога.", [card])
+
+
 def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
     identities = db.execute(
         """SELECT DISTINCT group_id, CASE WHEN group_id IS NULL THEN offer_id END
@@ -434,22 +638,27 @@ def _compare_offers(db: sqlite3.Connection, key: str) -> TurnResult:
 
     group_id, offer_id = identities[0]
     condition, value = ("group_id", group_id) if group_id else ("offer_id", offer_id)
+    version = _schema_version(db)
+    fields = _offer_columns(version) if version >= EVIDENCE_SCHEMA_VERSION else f"{OFFER_FIELDS}, edition, term, license_type"
     rows = db.execute(
-        f"""SELECT {OFFER_FIELDS}, edition, term, license_type FROM offers CROSS JOIN snapshot
+        f"""SELECT {fields} FROM offers CROSS JOIN snapshot
             WHERE {condition} = ? ORDER BY offer_id LIMIT ?""",
         (value, COMPARISON_LIMIT + 1),
     ).fetchall()
     cards = [
         card
         for row in rows[:COMPARISON_LIMIT]
-        if (card := product_card(Offer(*row), "Предложение из найденного семейства")) is not None
+        if (card := product_card(
+            _offer_with_evidence(db, version, row), "Предложение из найденного семейства"
+        )) is not None
     ]
     if not cards:
         return TurnResult(outcome="clarify", text="У найденных предложений нет проверяемых ссылок. Могу передать вопрос менеджеру.")
 
     summary = ["Параметры предложений по данным каталога:"]
     for card in cards:
-        facts = ", ".join(f"{FACT_LABELS[fact.field]}: {fact.value}" for fact in card.verified_facts)
+        values = {fact.field: fact.value for fact in card.verified_facts if fact.field in FACT_LABELS}
+        facts = ", ".join(f"{FACT_LABELS[field]}: {value}" for field, value in values.items())
         summary.append(f"• {card.title} — {facts or 'редакция и условия лицензии не указаны'}")
     if len(rows) > len(cards):
         summary.append("Показана часть предложений. Уточните редакцию или срок лицензии, чтобы сузить список.")
@@ -473,7 +682,7 @@ def _named_product_reply(
     if key is None:
         return None
     with _open_catalog(index) as db:
-        version = db.execute("PRAGMA user_version").fetchone()[0]
+        version = _schema_version(db)
         if version < NAMED_SCHEMA_VERSION:
             if explicit:
                 return TurnResult(outcome="clarify", text="Для поиска по названию нужно обновить снимок каталога. Если знаете артикул, пришлите его.")
@@ -481,16 +690,18 @@ def _named_product_reply(
 
         if compare:
             return _compare_offers(db, key)
+        fields = _offer_columns(version) if version >= EVIDENCE_SCHEMA_VERSION else f"{OFFER_FIELDS}, edition, term, license_type"
         rows = db.execute(
-            f"""SELECT {OFFER_FIELDS}, edition, term, license_type FROM offers CROSS JOIN snapshot
+            f"""SELECT {fields} FROM offers CROSS JOIN snapshot
                 WHERE title_key = ? LIMIT 2""",
             (key,),
         ).fetchall()
         if not rows and not explicit and not _known_family_prefix(db, key):
             return None
-    if len(rows) != 1:
-        return TurnResult(outcome="clarify", text=f"Не удалось подтвердить одно предложение с названием «{name}». Укажите точную редакцию или артикул.")
-    card = product_card(Offer(*rows[0]), "Точное совпадение названия в каталоге")
+        if len(rows) != 1:
+            return TurnResult(outcome="clarify", text=f"Не удалось подтвердить одно предложение с названием «{name}». Укажите точную редакцию или артикул.")
+        offer = _offer_with_evidence(db, version, rows[0])
+    card = product_card(offer, "Точное совпадение названия в каталоге")
     if card is None:
         return TurnResult(outcome="clarify", text=f"Для «{name}» в каталоге нет проверяемой ссылки. Могу передать вопрос менеджеру.")
     return _answer(f"Нашёл «{card.title}» по точному названию в каталоге.", [card])
@@ -500,6 +711,8 @@ def catalog_reply(index: Path, text: str) -> TurnResult | None:
     text = text.strip()
     if request := SKU_REQUEST.fullmatch(text):
         return _sku_reply(index, request[1])
+    if request := OFFER_ID_REQUEST.fullmatch(text):
+        return _offer_id_reply(index, request[1])
     if request := COMPARE_REQUEST.fullmatch(text):
         return _named_product_reply(index, request[1], compare=True)
     if request := PRODUCT_REQUEST.fullmatch(text):
@@ -514,11 +727,18 @@ def main() -> None:
     parser.add_argument("feed", type=Path)
     parser.add_argument("index", type=Path)
     parser.add_argument("--snapshot-at", help="ISO timestamp with a timezone for the catalog snapshot")
+    parser.add_argument("--knowledge", type=Path, help="Reviewed local JSON or JSONL evidence manifest")
+    parser.add_argument("--coverage", action="store_true", help="Print JSON coverage of the feed and resulting index")
     args = parser.parse_args()
     try:
-        snapshot = build_index(args.feed, args.index, source_at=args.snapshot_at)
+        snapshot = build_index(
+            args.feed, args.index, source_at=args.snapshot_at, knowledge=args.knowledge, coverage=args.coverage
+        )
     except (OSError, ValueError) as exc:
         parser.exit(1, f"{exc}\n")
+    if snapshot.coverage is not None:
+        print(json.dumps(snapshot.coverage, ensure_ascii=False, sort_keys=True))
+        return
     print(
         f"Offers: {snapshot.offer_count}; missing ID: {snapshot.missing_id_count}; "
         f"snapshot: {snapshot.source_at.isoformat()}; SHA-256: {snapshot.sha256}"
