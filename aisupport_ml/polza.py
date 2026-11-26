@@ -12,8 +12,12 @@ DEFAULT_MODEL = "anthropic/claude-haiku-5.5"
 class PolzaIntentModel:
     """Structured ticket extraction through the Polza.ai Chat Completions API."""
 
-    def __init__(self, client: httpx.AsyncClient):
+    def __init__(
+        self, client: httpx.AsyncClient, *, max_tokens: int = 256, reasoning_effort: str | None = None,
+    ):
         self.client = client
+        self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.endpoint = os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
         self.model = os.environ.get("LLM_MODEL", DEFAULT_MODEL)
         self.api_key = os.environ.get("LLM_API_KEY", "").strip()
@@ -39,7 +43,9 @@ class PolzaIntentModel:
                     },
                     "stream": False,
                     "temperature": 0,
-                    "max_tokens": 256,
+                    "max_tokens": self.max_tokens,
+                    **({"reasoning": {"effort": self.reasoning_effort, "exclude": True}}
+                       if self.reasoning_effort else {}),
                 },
                 follow_redirects=False,
             )
