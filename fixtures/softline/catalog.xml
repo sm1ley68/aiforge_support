@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<yml_catalog date="2026-11-26T12:00:00+03:00">
+  <shop><offers>
+    <offer id="demo-basic" available="true" group_id="demo-mail">
+      <name>Demo Mail Basic</name><vendorCode>DEMO-MAIL-12</vendorCode>
+      <url>https://example.com/demo-mail-basic</url><price>9000</price><currencyId>RUB</currencyId>
+      <description>Защита почты и файлов для организации.</description>
+      <param name="Семейство">Demo Mail</param><param name="Редакция">Basic</param>
+      <param name="Срок лицензии">12 месяцев</param><param name="Количество пользователей">100</param>
+      <param name="Развёртывание">on-premise</param><param name="Страна происхождения">Россия</param>
+      <param name="Capability">email_protection</param><param name="Capability">file_protection</param>
+      <param name="License quantity">100</param><param name="Price basis">license_pack</param>
+    </offer>
+    <offer id="demo-plus" available="true" group_id="demo-mail">
+      <name>Demo Mail Plus</name><vendorCode>DEMO-MAIL-24</vendorCode>
+      <url>https://example.com/demo-mail-plus</url><price>14000</price><currencyId>RUB</currencyId>
+      <description>Защита почты и файлов.</description>
+      <param name="Семейство">Demo Mail</param><param name="Редакция">Plus</param>
+      <param name="Срок лицензии">24 месяца</param><param name="Количество пользователей">100</param>
+      <param name="Развёртывание">cloud</param><param name="Страна происхождения">США</param>
+    </offer>
+  </offers></shop>
+</yml_catalog>

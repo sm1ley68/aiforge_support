@@ -1,0 +1,117 @@
+{
+  "dataset": "synthetic",
+  "cases": [
+    {
+      "id": "named-product",
+      "turns": [
+        {
+          "text": "Нужен Demo Mail Standard",
+          "outcomes": [
+            "clarify"
+          ],
+          "skus": []
+        },
+        {
+          "text": "Сравни редакции Demo Mail",
+          "outcomes": [
+            "answer"
+          ],
+          "skus": [
+            "DEMO-MAIL-12",
+            "DEMO-MAIL-24"
+          ],
+          "sources": true
+        },
+        {
+          "text": "Сколько стоит?",
+          "outcomes": [
+            "clarify"
+          ],
+          "skus": []
+        },
+        {
+          "text": "Какая цена у SKU: DEMO-MAIL-12?",
+          "outcomes": [
+            "answer"
+          ],
+          "text_contains": [
+            "9000 RUB"
+          ],
+          "sources": true
+        },
+        {
+          "text": "Какой срок лицензии?",
+          "outcomes": [
+            "answer"
+          ],
+          "text_contains": [
+            "12 месяцев"
+          ],
+          "sources": true
+        }
+      ]
+    },
+    {
+      "id": "task-refinement",
+      "turns": [
+        {
+          "text": "Не знаю, что нужно, но хотим защитить почту и файлы на 50 сотрудников",
+          "outcomes": [
+            "recommend"
+          ],
+          "sources": true,
+          "skus": [
+            "DEMO-MAIL-12"
+          ]
+        },
+        {
+          "text": "Только локально",
+          "outcomes": [
+            "recommend"
+          ],
+          "skus": [
+            "DEMO-MAIL-12"
+          ]
+        },
+        {
+          "text": "Бюджет до 10 000 рублей",
+          "outcomes": [
+            "recommend"
+          ],
+          "skus": [
+            "DEMO-MAIL-12"
+          ]
+        },
+        {
+          "text": "Покажи российский аналог",
+          "outcomes": [
+            "recommend"
+          ],
+          "skus": [
+            "DEMO-MAIL-12"
+          ]
+        },
+        {
+          "text": "Бюджет снизился до 8 500 рублей",
+          "outcomes": [
+            "clarify"
+          ],
+          "skus": []
+        }
+      ]
+    },
+    {
+      "id": "manager-handoff",
+      "turns": [
+        {
+          "text": "Позовите менеджера, пожалуйста.",
+          "outcomes": [
+            "handoff"
+          ],
+          "repeat": true,
+          "manager": true
+        }
+      ]
+    }
+  ]
+}

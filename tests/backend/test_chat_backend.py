@@ -1,0 +1,219 @@
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+from uuid import uuid4
+
+from fastapi.testclient import TestClient
+from psycopg import connect, sql
+from psycopg.conninfo import make_conninfo
+
+from softline_backend.api import create_app
+from softline_backend.catalog import build_index
+from softline_backend.contracts import TurnResult
+from softline_backend.store import ChatStore
+from softline_backend.worker import process_one, reply_from_env
+
+
+@unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "requires PostgreSQL")
+class ChatBackendTests(unittest.TestCase):
+    def setUp(self):
+        database_url = os.environ["TEST_DATABASE_URL"]
+        schema = f"test_{uuid4().hex}"
+        with connect(database_url, autocommit=True) as db:
+            db.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        self.addCleanup(self.drop_schema, database_url, schema)
+        self.store = ChatStore(make_conninfo(database_url, options=f"-c search_path={schema}"))
+        self.store.initialize()
+        self.client = TestClient(create_app(self.store))
+        self.addCleanup(self.client.close)
+        response = self.client.post("/chats")
+        self.assertEqual(response.status_code, 201)
+        self.chat = response.json()
+        self.path = f"/chats/{self.chat['chat_id']}"
+        self.headers = {"Authorization": f"Bearer {self.chat['chat_token']}"}
+
+    @staticmethod
+    def drop_schema(database_url, schema):
+        with connect(database_url, autocommit=True) as db:
+            db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+    def submit(self, message_id, text):
+        return self.client.post(
+            f"{self.path}/messages",
+            headers=self.headers,
+            json={"client_message_id": message_id, "text": text},
+        )
+
+    def test_round_trip_and_idempotency(self):
+        response = self.submit("phone-1", "Нужна защита для 50")
+        self.assertEqual(response.status_code, 202)
+        turn_id = response.json()["turn_id"]
+        turn_url = f"{self.path}/turns/{turn_id}"
+        self.assertEqual(self.client.get(turn_url, headers=self.headers).json()["status"], "queued")
+        self.assertEqual(self.submit("phone-1", "Нужна защита для 50").json()["turn_id"], turn_id)
+        self.assertEqual(self.submit("phone-1", "Другое").status_code, 409)
+        self.assertTrue(process_one(self.store))
+        self.assertFalse(process_one(self.store))
+        turn = self.client.get(turn_url, headers=self.headers).json()
+        self.assertEqual((turn["status"], turn["outcome"]), ("succeeded", "clarify"))
+        messages = self.client.get(f"{self.path}/messages", headers=self.headers).json()
+        self.assertEqual([message["role"] for message in messages], ["user", "assistant"])
+
+    def test_chat_access_and_fifo(self):
+        first = self.submit("first", "Первый").json()["turn_id"]
+        second = self.submit("second", "Второй").json()["turn_id"]
+        self.assertEqual(
+            self.client.get(f"{self.path}/messages", headers={"Authorization": "Bearer wrong"}).status_code,
+            404,
+        )
+        self.assertEqual(str(self.store.claim().turn_id), first)
+        self.assertIsNone(self.store.claim())
+        self.assertEqual(
+            self.client.get(f"{self.path}/turns/{second}", headers=self.headers).json()["status"], "queued"
+        )
+
+    def test_expired_worker_cannot_publish(self):
+        self.submit("first", "Нужен товар")
+        expired = self.store.claim(lease_seconds=0)
+        current = self.store.claim()
+        self.assertEqual(current.turn_id, expired.turn_id)
+        self.assertFalse(self.store.finish(expired, error="processing_failed"))
+        self.assertTrue(self.store.finish(current, error="processing_failed"))
+
+    def test_handler_receives_only_previous_turns(self):
+        self.submit("first", "Сервер на 50 пользователей")
+        second = self.submit("second", "Только локально").json()["turn_id"]
+        self.submit("third", "Третий вопрос")
+        self.assertTrue(process_one(self.store))
+
+        def reply(text, history):
+            self.assertEqual(text, "Только локально")
+            self.assertEqual([message.role for message in history], ["user", "assistant"])
+            self.assertEqual(history[0].text, "Сервер на 50 пользователей")
+            return TurnResult(outcome="answer", text="Понял: только локально.")
+
+        self.assertTrue(process_one(self.store, reply))
+        result = self.client.get(f"{self.path}/turns/{second}", headers=self.headers).json()
+        self.assertEqual((result["outcome"], result["text"]), ("answer", "Понял: только локально."))
+
+    def test_customer_request_creates_one_manager_case(self):
+        request = self.submit("handoff", "Позовите менеджера, пожалуйста.")
+        turn_id = request.json()["turn_id"]
+        self.assertEqual(self.submit("handoff", "Позовите менеджера, пожалуйста.").json()["turn_id"], turn_id)
+        self.assertTrue(process_one(self.store))
+        self.assertFalse(process_one(self.store))
+
+        result = self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+        self.assertEqual(result["outcome"], "handoff")
+        self.assertNotIn("handoff", result)
+        self.assertEqual(self.client.get("/manager/handoffs").status_code, 401)
+        self.assertEqual(self.client.get("/manager/handoffs", headers=self.headers).status_code, 403)
+
+        with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
+            headers = {"Authorization": "Bearer manager-secret"}
+            cases = manager.get("/manager/handoffs", headers=headers).json()
+            self.assertEqual(len(cases), 1)
+            self.assertEqual(cases[0]["handoff_id"], turn_id)
+            self.assertEqual(cases[0]["reason"], "customer_requested")
+            detail = manager.get(f"/manager/handoffs/{turn_id}", headers=headers).json()
+            self.assertEqual(detail["messages"][0]["text"], "Позовите менеджера, пожалуйста.")
+            self.assertEqual(detail["messages"][1]["role"], "assistant")
+
+
+    def test_catalog_result_reaches_chat_through_configured_worker(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            feed.write_text(
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="example" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            index = Path(folder) / "catalog.sqlite3"
+            build_index(feed, index)
+            turn_id = self.submit("sku", "SKU: MAIL-12").json()["turn_id"]
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                self.assertTrue(process_one(self.store, reply_from_env()))
+
+        turn = self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+        self.assertEqual(turn["outcome"], "answer")
+        self.assertEqual(turn["products"][0]["sku"], "MAIL-12")
+        self.assertEqual(turn["sources"][0]["url"], "https://example.com/mail")
+
+
+    def test_task_constraints_reach_worker_from_persisted_chat_history(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            index = Path(folder) / "catalog.sqlite3"
+            feed.write_text(
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="example" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                '<description>Защита почты и файлов</description>'
+                '<param name="Развёртывание">on-premise</param>'
+                '<param name="Количество пользователей">100</param>'
+                '<currencyId>RUB</currencyId><price>9000</price>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            build_index(feed, index)
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                reply = reply_from_env()
+            self.submit("task", "Нужна защита почты и файлов на 50 сотрудников")
+            local_id = self.submit("deployment", "Только локально").json()["turn_id"]
+            budget_id = self.submit("budget", "Бюджет до 8 500 рублей").json()["turn_id"]
+            for _ in range(3):
+                self.assertTrue(process_one(self.store, reply))
+
+        local = self.client.get(f"{self.path}/turns/{local_id}", headers=self.headers).json()
+        self.assertEqual(local["outcome"], "answer")
+        self.assertEqual([card["sku"] for card in local["products"]], ["MAIL-12"])
+        self.assertIn("локально", local["text"])
+        self.assertIn("50", local["text"])
+        budget = self.client.get(f"{self.path}/turns/{budget_id}", headers=self.headers).json()
+        self.assertEqual((budget["status"], budget["outcome"], budget["products"]), ("succeeded", "clarify", []))
+
+    def test_fact_questions_use_selected_offer_and_current_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            index = Path(folder) / "catalog.sqlite3"
+            contents = (
+                '<yml_catalog date="2026-11-26T12:00:00+03:00"><shop><offers>'
+                '<offer id="demo" available="true"><name>Demo Mail</name>'
+                '<vendorCode>MAIL-12</vendorCode><url>https://example.com/mail</url>'
+                '<price>9000</price><currencyId>RUB</currencyId>'
+                '<param name="Срок лицензии">12 месяцев</param>'
+                "</offer></offers></shop></yml_catalog>"
+            )
+            feed.write_text(contents)
+            build_index(feed, index)
+            with patch.dict(os.environ, CATALOG_INDEX_PATH=str(index)):
+                reply = reply_from_env()
+            self.submit("sku", "Артикул MAIL-12")
+            self.assertTrue(process_one(self.store, reply))
+
+            feed.write_text(contents.replace("9000", "8500"))
+            build_index(feed, index)
+            questions = [
+                ("price", "А сколько стоит?"),
+                ("missing-fact", "Какое развёртывание?"),
+                ("term", "Какой срок лицензии?"),
+            ]
+            turn_ids = [self.submit(key, question).json()["turn_id"] for key, question in questions]
+            for _ in turn_ids:
+                self.assertTrue(process_one(self.store, reply))
+
+        price, missing, term = [
+            self.client.get(f"{self.path}/turns/{turn_id}", headers=self.headers).json()
+            for turn_id in turn_ids
+        ]
+        self.assertEqual(price["outcome"], "answer")
+        self.assertIn("8500 RUB", price["text"])
+        self.assertEqual(price["sources"][0]["url"], "https://example.com/mail")
+        self.assertEqual(missing["outcome"], "clarify")
+        self.assertEqual(term["outcome"], "answer")
+        self.assertIn("12 месяцев", term["text"])
+        self.assertNotIn("catalog_selection", price)
+        history = self.client.get(f"{self.path}/messages", headers=self.headers).json()
+        self.assertNotIn("catalog_references", history[-1])

@@ -9,10 +9,15 @@ description = "Investigation and storefront support modules for AISupportAgent"
 requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
-include = ["aisupport_ml*"]
+include = ["aisupport_ml*", "softline_backend*"]
+
+[tool.setuptools.package-data]
+softline_backend = ["schema.sql", "demo/*.html", "demo/*.css", "demo/*.js"]
 
 [project.optional-dependencies]
 catalog = ["lxml>=5"]
 retrieval = ["sentence-transformers>=5.2,<6"]
 ollama = ["httpx>=0.27,<1"]
 polza = ["httpx>=0.27,<1"]
+backend = ["defusedxml>=0.7,<1", "fastapi>=0.115,<1", "httpx>=0.27,<1", "psycopg[binary]>=3.2,<4", "uvicorn>=0.34,<1"]
+backend-test = ["httpx2>=2,<3"]

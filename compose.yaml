@@ -1,0 +1,55 @@
+x-backend: &backend
+  build: .
+  user: ${SOFTLINE_DOCKER_USER:-app}
+  environment: &backend-env
+    DATABASE_URL: postgresql://softline:softline@db:5432/softline
+    CATALOG_INDEX_PATH: ${CATALOG_INDEX_PATH:-}
+    POLZA_API_KEY: ${POLZA_API_KEY:-}
+    POLZA_TASK_MODEL: ${POLZA_TASK_MODEL:-}
+  volumes:
+    - type: bind
+      source: ${CATALOG_DIR:-./fixtures}
+      target: /catalog
+      read_only: true
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: softline
+      POSTGRES_USER: softline
+      POSTGRES_PASSWORD: softline
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U softline -d softline"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      MANAGER_TOKEN: ${MANAGER_TOKEN:-}
+    command: ["sh", "-c", "python -m softline_backend && exec uvicorn softline_backend.api:app_from_env --factory --host 0.0.0.0"]
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health/live', timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    <<: *backend
+    command: ["python", "-m", "softline_backend.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
