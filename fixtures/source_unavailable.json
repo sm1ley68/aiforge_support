@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "outcome": "escalate",
+  "summary": "Не удалось завершить обязательную проверку.",
+  "claims": [],
+  "evidence": [
+    {
+      "id": "crm:C-1",
+      "source": "crm",
+      "record_id": "C-1",
+      "label": "C-1",
+      "observed_at": "2026-11-11T00:00:00+00:00",
+      "url": "https://example.test/crm/C-1",
+      "excerpt": "C-1",
+      "version": null
+    }
+  ],
+  "action": null,
+  "reply_draft": null,
+  "missing_data": [
+    "get_order"
+  ],
+  "escalation_team": "support"
+}

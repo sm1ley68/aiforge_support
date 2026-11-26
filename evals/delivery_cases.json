@@ -1,0 +1,581 @@
+[
+  {
+    "id": "overdue",
+    "text": "Заказ O-42 обещали привезти вчера. Посылки всё ещё нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "missing_id",
+    "text": "Курьер так и не приехал, хотя срок доставки был вчера.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": null,
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "multiple_orders_without_id",
+    "text": "Посылка не приехала в обещанный срок.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": null,
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "orders": [
+        "O-42",
+        "O-43"
+      ]
+    },
+    "expected": {
+      "outcome": "needs_clarification",
+      "action_target": null,
+      "missing_data": [
+        "order_id"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "explicit_second_order",
+    "text": "Заказ O-20 пришёл вовремя. По O-21 срок прошёл, посылки нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-21",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "orders": [
+        "O-20",
+        "O-21"
+      ]
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-21",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "quoted_old_order",
+    "text": "Новый заказ O-31 просрочен. Ниже цитата старого письма по заказу O-30: «Доставлен».",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-31",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "orders": [
+        "O-30",
+        "O-31"
+      ]
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-31",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": [
+        "get_order_events",
+        "get_related_cases"
+      ]
+    }
+  },
+  {
+    "id": "quoted_old_promise",
+    "text": "O-42 опаздывает. Пересылаю для справки старую переписку о другом заказе O-09: «Уже обращался, обещали перезвонить».",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "orders": [
+        "O-09",
+        "O-42"
+      ]
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": [
+        "get_order_events",
+        "get_related_cases"
+      ]
+    }
+  },
+  {
+    "id": "quoted_current_status",
+    "text": "Заказ O-42 у вас отмечен «доставлен», но мне его не вручали.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": true,
+      "prior_contact": false
+    },
+    "sources": {
+      "event_status": "delivered"
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "consistent_delivery_status"
+      ],
+      "required_checks": [
+        "get_order_events"
+      ],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "current_support_promise",
+    "text": "Уже писал в поддержку по O-42, мне обещали доставить вчера, а заказа нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": true
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "get_related_cases",
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "both_signals",
+    "text": "По O-42 уже звонил в поддержку. У вас он доставлен, но я его не получил.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": true,
+      "prior_contact": true
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "get_order_events",
+        "get_related_cases",
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "returned_on_time",
+    "text": "Заказ O-42 приехал вовремя. Как вернуть неподходящий размер?",
+    "intent": {
+      "kind": "other",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "supported_intent"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "find_orders",
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "future_order",
+    "text": "Заказ O-42 ещё не задерживается. Срок завтра, можно изменить адрес?",
+    "intent": {
+      "kind": "other",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "supported_intent"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "find_orders",
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "no_crm_link",
+    "text": "Заказ O-42 не приехал вчера к обещанному сроку.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "customer": false
+    },
+    "expected": {
+      "outcome": "needs_clarification",
+      "action_target": null,
+      "missing_data": [
+        "customer_link"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "find_orders",
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "order_outside_scope",
+    "text": "Заказ O-55 должен был приехать вчера, но его нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-55",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {},
+    "expected": {
+      "outcome": "needs_clarification",
+      "action_target": null,
+      "missing_data": [
+        "order_id"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "stale_order_link",
+    "text": "O-42 задерживается, срок был вчера.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "order_missing": true
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "verified_order"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "one_retry",
+    "text": "Срок доставки O-42 вышел, заказ не прибыл.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "order_failures": 1
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "persistent_order_failure",
+    "text": "O-42 должен был прийти вчера, но не пришёл.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "order_failures": 2
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "get_order"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "duplicate_without_hint",
+    "text": "Доставка O-42 просрочена. Посылки нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "denial": "existing_inquiry"
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "existing_inquiry"
+      ],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "expired_policy",
+    "text": "Заказ O-42 задерживается на два дня.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "denial": "approved_policy",
+      "search_misses": 2
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "approved_policy"
+      ],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "applicable_exception",
+    "text": "O-42 уже два дня как должен был прийти.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "denial": "policy_exception"
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "policy_exception"
+      ],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "search_fallback",
+    "text": "O-42 должен был приехать утром, день прошёл, заказа нет.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "search_misses": 1
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": []
+    }
+  },
+  {
+    "id": "dispute_source_empty",
+    "text": "Трекинг O-42 показывает вручение, но посылку никто не забирал.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": true,
+      "prior_contact": false
+    },
+    "sources": {
+      "event_status": null
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "consistent_delivery_status"
+      ],
+      "required_checks": [
+        "get_order_events"
+      ],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "actual_deadline_future",
+    "text": "По O-42 опаздывает доставка, обещали привезти вчера.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "future_deadline": true
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "confirmed_delay"
+      ],
+      "required_checks": [],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "delivered_with_no_dispute",
+    "text": "Заказ O-42 не привезли к сроку.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "order_status": "delivered",
+      "event_status": "delivered"
+    },
+    "expected": {
+      "outcome": "escalate",
+      "action_target": null,
+      "missing_data": [
+        "confirmed_delay"
+      ],
+      "required_checks": [
+        "get_order_events"
+      ],
+      "forbidden_checks": [
+        "authorize_delivery_inquiry"
+      ]
+    }
+  },
+  {
+    "id": "previous_contact_different_order",
+    "text": "По O-42 я раньше не обращался. Его всё ещё нет, срок прошёл. В поддержку писал только про O-19.",
+    "intent": {
+      "kind": "delivery_delay",
+      "order_hint": "O-42",
+      "disputed_status": false,
+      "prior_contact": false
+    },
+    "sources": {
+      "orders": [
+        "O-19",
+        "O-42"
+      ]
+    },
+    "expected": {
+      "outcome": "resolved",
+      "action_target": "O-42",
+      "missing_data": [],
+      "required_checks": [
+        "authorize_delivery_inquiry"
+      ],
+      "forbidden_checks": [
+        "get_related_cases"
+      ]
+    }
+  }
+]
