@@ -70,6 +70,7 @@ class CatalogOffer:
     edition: str | None
     platform: str | None
     operating_system: str | None
+    site_verified_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

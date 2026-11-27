@@ -7,6 +7,7 @@ from time import monotonic, sleep
 
 from psycopg import OperationalError
 
+from aisupport_ml.commerce.edo import edo_answer
 from aisupport_ml.commerce.retrieval import normalize
 from aisupport_ml.commerce.routing import explicit_handoff_requested
 
@@ -73,11 +74,19 @@ def process_one(
                 text="Передал ваше обращение менеджеру.",
                 handoff=HandoffDetails(reason="customer_requested", summary=turn.message_text),
             )
+        elif answer := edo_answer(turn.message_text):
+            text, sources = answer
+            result = TurnResult(outcome="answer", text=text, sources=[
+                Source(title=source.title, url=source.url) for source in sources
+            ])
         else:
             result = reply(turn.message_text, history)
         if (result.outcome in {"clarify", "handoff"}
                 and not explicit_handoff_requested(turn.message_text) and not QUOTE_REQUEST.fullmatch(turn.message_text.strip())):
-            if result.handoff is None or result.handoff.reason in {"insufficient_evidence", "provider_unavailable"}:
+            if result.handoff is None or (
+                result.handoff.reason in {"insufficient_evidence", "provider_unavailable"}
+                and "Вопрос клиента" not in result.handoff.requirements
+            ):
                 reference = next(
                     (message.catalog_references[0] for message in reversed(history) if len(message.catalog_references) == 1),
                     None,

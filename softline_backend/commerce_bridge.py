@@ -29,7 +29,7 @@ from .polza_egress import (
     ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, check_transport_request, load_egress_filter, polza_scope, prepare, record,
 )
 from .quotes import QUOTE_REQUEST, discount_response
-from .site_card import fetch_terms
+from .site_card import fetch_card_evidence, fetch_terms
 from .store import ClaimedTurn
 
 
@@ -133,8 +133,14 @@ def _card(offer: CatalogOffer, recommendation: Recommendation | None) -> Product
         "platform": offer.platform,
         "operating_system": offer.operating_system,
     }
-    facts = [VerifiedFact(field=field, value=str(value), source=source)
+    site_source = Source(title=f"Карточка Softline · {offer.vendor_code or offer.offer_id}", url=url)
+    facts = [VerifiedFact(field=field, value=str(value),
+                          source=site_source if field in offer.site_verified_fields else source)
              for field, value in attributes.items() if value is not None]
+    for field, value in (("price", offer.price), ("availability", offer.available)):
+        if field in offer.site_verified_fields:
+            shown = {True: "доступно", False: "недоступно"}[value] if field == "availability" else f"{value:.2f} {offer.currency}"
+            facts.append(VerifiedFact(field=field, value=shown, source=site_source))
     summary = "Данные из снимка каталога"
     if desktop := desktop_evidence(offer):
         summary = "Цена указана за ПК"
@@ -175,7 +181,8 @@ class CommerceBridge:
     def __init__(self, index_path: Path, model: IntentModel, *, model_timeout: int = 6, verify_site: bool = False):
         self.verify_site = verify_site
         self.agent = CommerceAgent(
-            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=model_timeout
+            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path),
+            model_timeout=model_timeout, card_lookup=fetch_card_evidence if verify_site else None,
         )
 
     def restore_knowledge(self, publications: list[tuple[str, str, str]]) -> None:
@@ -333,6 +340,8 @@ class CommerceBridge:
                 reason = "commercial_terms" if COMMERCIAL_REQUEST.search(text) else "customer_requested"
             summary = " ".join(text.split())[:240]
             requirements = _requirements(context)
+            if result.handoff.reason == "conflicting_sources":
+                requirements["Вопрос клиента"] = text
             if result.handoff.reason in {"conflicting_sources", "support_follow_up"}:
                 label = "Спорный факт" if result.handoff.reason == "conflicting_sources" else "Что проверить"
                 requirements[label] = result.handoff.question

@@ -12,7 +12,7 @@ from aisupport_ml.commerce.catalog import CatalogOffer
 from softline_backend.api import create_app
 from softline_backend.commerce_bridge import CatalogModel, CommerceBridge
 from softline_backend.quotes import discount_response
-from softline_backend.site_card import SiteTerms, read_terms
+from softline_backend.site_card import SiteTerms, read_card_evidence, read_terms
 from softline_backend.store import ChatStore, ClaimedTurn
 from softline_backend.support_hours import SupportHours
 
@@ -23,20 +23,43 @@ URL = "https://store.softline.ru/test/sku-1001/"
 class CommercialTests(unittest.TestCase):
     def test_card_accepts_only_same_sku_and_consistent_labeled_price(self):
         html = f'''<script type="application/ld+json">{{
-          "@type":"Product","sku":"EXACT",
+          "@type":"Product","sku":"EXACT","name":"Редактор Professional",
           "offers":{{"@type":"Offer","url":"{URL}","price":"120","priceCurrency":"RUB"}}
         }}</script>
         <div class="b-checkout-modal__body">
           <span class="js-pay_in_one_click-price">120</span>
           <span>Размер НДС (20%)</span>
         </div>'''
-        offer = SimpleNamespace(vendor_code="EXACT", offer_id="1001", url=URL)
+        offer = SimpleNamespace(vendor_code="EXACT", offer_id="1001", url=URL, title="Редактор Professional",
+                                edition="Professional")
         terms = read_terms(offer, html)
         self.assertEqual(terms.price, Decimal("120"))
         self.assertEqual(terms.vat_label, "НДС 20%")
         self.assertIsNone(read_terms(offer, html.replace('"EXACT"', '"OTHER"')))
         self.assertTrue(read_terms(offer, html.replace(">120</span>", ">119</span>")).conflicting_price)
         self.assertIsNone(read_terms(offer, html.replace("Размер НДС (20%)", "Общие сведения об НДС")).vat_label)
+
+    def test_product_facts_require_the_same_sku_offer_and_edition(self):
+        offer = CatalogOffer(
+            "1001", "EXACT", None, None, "Редактор Professional 2024", None, URL, "2026-11-27 10:00",
+            Decimal("99"), "RUB", False, None, None, None, "Professional 2024", None, None,
+        )
+        html = f'''<script type="application/ld+json">{{
+          "@type":"Product","sku":"EXACT","name":"Редактор Professional 2024",
+          "additionalProperty":[{{"name":"Срок лицензии","value":"24 мес."}},
+                                 {{"name":"Операционная система","value":"Windows 11"}}],
+          "offers":{{"@type":"Offer","url":"{URL}","price":"120","priceCurrency":"RUB",
+                     "availability":"https://schema.org/InStock"}}
+        }}</script>'''
+        card = read_card_evidence(offer, html)
+        self.assertEqual((card.price_rub, card.available, card.term, card.platforms),
+                         (Decimal("120"), True, "24 мес.", ("windows 11",)))
+        for wrong in (html.replace("Professional", "Standard"), html.replace('"EXACT"', '"OTHER"'),
+                      html.replace("/sku-1001/", "/other-1001/")):
+            self.assertIsNone(read_card_evidence(offer, wrong))
+        disputed = read_card_evidence(offer, html + html.replace('"120"', '"121"'))
+        self.assertIn("price", disputed.conflicts)
+        self.assertIsNone(disputed.price_rub)
 
     def test_quote_uses_authoritative_card_or_escalates_an_ambiguous_price(self):
         offer = CatalogOffer(

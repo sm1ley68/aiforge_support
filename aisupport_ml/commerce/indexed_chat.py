@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 from .catalog import CatalogOffer, SoftlineCatalog
 from .contracts import CatalogContext, Recommendation, Source
-from .offer_evidence import commercial_dispute, offer_card, verified_security_package, verified_term
+from .offer_evidence import OfferCardEvidence, current_card, offer_card, verified_security_package, verified_term
 from .extraction import OPTIONAL_TEXT, _literal, object_schema
 from .retrieval import normalize
 from .softline_evidence import (
@@ -198,9 +199,19 @@ def context_fact(text: str) -> str | None:
     return next((fact for fact, pattern in _BARE_FACTS if pattern.fullmatch(question)), None)
 
 
+def _looks_like_sku(value: str) -> bool:
+    return any(char.isdigit() for char in value) or re.fullmatch(r"[A-Z]{4,25}", value) is not None
+
+
 def direct_sku(text: str) -> CatalogInput | None:
+    compatibility = re.fullmatch(
+        r"(?:совместим(?:а|о)? ли|работает ли|подойд[её]т ли) ([\w-]{2,40}) (?:с|на|для) (.+)", text.strip(" ?!."),
+        re.I,
+    )
+    if compatibility and _looks_like_sku(compatibility[1]) and _FILE_SERVER.fullmatch(compatibility[2]):
+        return CatalogInput("fact", product=compatibility[1], fact="compatibility")
     match = _EXACT_SKU.fullmatch(text)
-    if match is None or not any(char.isdigit() for char in match[1]):
+    if match is None or not _looks_like_sku(match[1]):
         return None
     prefix = normalize(text[:match.start(1)])
     fact = {
@@ -465,7 +476,9 @@ def _line(item: CatalogOffer, *, nodes: int | None = None) -> str:
         price += " за ПК"
     elif item.price is not None and "по количеству" in item.title.casefold():
         price += " за единицу лицензирования"
-    status = {True: "доступно по фиду", False: "недоступно по фиду", None: "наличие не указано"}[item.available]
+    status = {True: "доступно", False: "недоступно", None: "наличие не указано"}[item.available]
+    if item.available is not None:
+        status += " по карточке" if "availability" in item.site_verified_fields else " по фиду"
     details = [item.license_type, item.term, f"до {item.user_limit} пользователей" if item.user_limit else None]
     return f"{item.title} ({item.offer_id}) — " + "; ".join((*filter(None, details), price, status)) + "."
 
@@ -478,7 +491,11 @@ def _offer_license(item: CatalogOffer) -> str | None:
     return None
 
 
-def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
+def _named(
+    index: SoftlineCatalog, context: CatalogContext, *,
+    card_lookup: Callable[[CatalogOffer], OfferCardEvidence | None] | None = None,
+    include_exact_card: bool = False,
+) -> CatalogDecision:
     if not context.product:
         return CatalogDecision("clarify", "Уточните название продукта или артикул.", context)
     if context.russian_only:
@@ -499,6 +516,32 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
                 )
             return CatalogDecision("clarify", f"По фиду Softline редакция «{context.edition}» не подтверждена. "
                                    "Уточните редакцию, пришлите артикул или попросите показать варианты без фильтра по редакции.", context)
+    card_sources = ()
+    if include_exact_card and len(exact) == len(offers) == 1:
+        item, = offers
+        card = (card_lookup(item) if card_lookup else None) or offer_card(item)
+        if card is not None:
+            conflicts = card.conflicts & ({"term", "price", "availability"} if current_card(item, card) else {"term"})
+            if conflicts:
+                labels = {"term": "срок лицензии", "price": "цена", "availability": "наличие"}
+                shown = replace(context, shown_offers=(item.offer_id,))
+                return _unconfirmed(item, shown, (*_sources((item,)), card.source),
+                                    ", ".join(labels[field] for field in sorted(conflicts)))
+            updates = {}
+            verified = []
+            if card.term:
+                updates["term"] = card.term
+                verified.append("term")
+            if current_card(item, card):
+                if card.price_rub is not None:
+                    updates.update(price=card.price_rub, currency="RUB")
+                    verified.append("price")
+                if card.available is not None:
+                    updates["available"] = card.available
+                    verified.append("availability")
+            if verified:
+                card_sources = (card.source,)
+                offers = (replace(item, site_verified_fields=tuple(verified), **updates),)
     if context.users:
         offers = tuple(item for item in offers if item.user_limit is not None and item.user_limit >= context.users)
     if context.perpetual_only:
@@ -528,10 +571,15 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
     else:
         options = offers[:5]
     note = ("Позиция" if len(options) == 1 else "Варианты лицензий") + f" по фиду от {options[0].snapshot_at}:\n"
+    if card_sources:
+        labels = {"price": "цена", "availability": "наличие", "term": "срок лицензии"}
+        verified = ", ".join(labels[field] for field in options[0].site_verified_fields)
+        note = f"Сведения по карточке Softline: {verified}. Остальные данные по фиду от {options[0].snapshot_at}.\n"
     if len(options) > 1:
         note += "Проверьте, нужна новая лицензия или продление.\n"
     return CatalogDecision("answer", note + "\n".join(_line(item) for item in options),
-                           replace(context, shown_offers=tuple(item.offer_id for item in options)), options, _sources(options))
+                           replace(context, shown_offers=tuple(item.offer_id for item in options)),
+                           options, (*_sources(exact if card_sources else options), *card_sources))
 
 
 def _recommend_desktop(index: SoftlineCatalog, context: CatalogContext, task: DesktopTask) -> CatalogDecision:
@@ -720,7 +768,10 @@ def _recommend(index: SoftlineCatalog, context: CatalogContext, text: str) -> Ca
                            replace(context, shown_offers=tuple(item.offer_id for item in products)), products, sources)
 
 
-def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogDecision:
+def _fact(
+    index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str,
+    card_lookup: Callable[[CatalogOffer], OfferCardEvidence | None] | None,
+) -> CatalogDecision:
     if patch.product:
         requested = _update(None, replace(patch, action="named"), text)
         assert requested is not None
@@ -746,53 +797,86 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
         context = CatalogContext("named", product=item.offer_id, shown_offers=(item.offer_id,))
     sources = _sources(options)
     evidence = desktop_evidence(item)
-    card = offer_card(item)
-    if patch.fact == "language":
-        if card is not None and card.language:
-            return CatalogDecision("answer", f"{item.title} · язык интерфейса — {card.language}.",
-                                   context, options, (*sources, card.source))
-        return CatalogDecision("clarify", f"Язык интерфейса для «{item.title}» не подтверждён.",
-                               context, options, sources)
+    article_term = verified_term(item) if patch.fact == "term" else None
+    official = article_term[1] if article_term else evidence.source if evidence and patch.fact == "compatibility" else None
+    if official:
+        sources = (*sources, official)
+    label = {
+        "price": "цена", "availability": "наличие", "language": "язык интерфейса",
+        "compatibility": "совместимость", "term": "срок лицензии",
+    }[patch.fact]
+    field = {"price": "price_rub", "availability": "available", "language": "language",
+             "compatibility": "platforms", "term": "term"}[patch.fact]
+    card = None
+    checked_sources = []
+    for candidate in (card_lookup(item) if card_lookup else None, offer_card(item)):
+        if candidate is None or (patch.fact in {"price", "availability"} and not current_card(item, candidate)):
+            continue
+        checked_sources.append(candidate.source)
+        if patch.fact in candidate.conflicts:
+            return _unconfirmed(item, context, (*sources, *checked_sources), label)
+        if getattr(candidate, field) not in (None, "", ()):
+            card = candidate
+            sources = (*sources, card.source)
+            break
+
+    updates = {}
     if patch.fact == "price":
-        value = f"{item.price:.2f} {item.currency}" if item.price is not None and item.currency else None
+        if card:
+            updates = {"price": card.price_rub, "currency": "RUB", "site_verified_fields": ("price",)}
+        price, currency = (card.price_rub, "RUB") if card else (item.price, item.currency)
+        value = f"{price:.2f} {currency}" if price is not None and currency else None
         if value:
-            title = item.title.casefold()
             if evidence is not None:
                 value += " за ПК"
-            elif "по количеству узлов" in title:
+            elif "по количеству узлов" in item.title.casefold():
                 value += " за узел"
-            elif "по количеству" in title:
+            elif "по количеству" in item.title.casefold():
                 value += " за единицу лицензирования"
-        label = "Цена"
     elif patch.fact == "availability":
-        value = {True: "доступно", False: "недоступно", None: None}[item.available]
-        label = "Наличие"
+        if card:
+            updates = {"available": card.available, "site_verified_fields": ("availability",)}
+        value = {True: "доступно", False: "недоступно", None: None}[card.available if card else item.available]
+    elif patch.fact == "language":
+        value = card.language if card else None
     elif patch.fact == "compatibility":
-        platform = _FILE_SERVER.search(text)
-        assert platform is not None
-        if evidence is None or normalize(platform[0]) not in evidence.platforms:
-            return CatalogDecision("clarify", f"Для «{item.title}» совместимость с {platform[0]} "
-                                   "по проверенным материалам не подтверждена.", context, sources=sources)
-        return CatalogDecision(
-            "answer", f"Для «{item.title}» подтверждена поддержка {platform[0]}.",
-            context, options, (*sources, evidence.source),
-        )
+        platforms = tuple(_FILE_SERVER.finditer(text))
+        if not platforms:
+            return CatalogDecision("clarify", "Укажите операционную систему для проверки совместимости.", context)
+        platform = platforms[-1][0]
+        confirmed = card.platforms if card else evidence.platforms if evidence else ()
+        feed_platforms = {normalize(item.operating_system or ""), normalize(item.platform or "")}
+        if normalize(platform) not in confirmed and (card or normalize(platform) not in feed_platforms):
+            return _unconfirmed(item, context, (*sources, *checked_sources), f"совместимость с {platform}")
+        message = f"Для «{item.title}» подтверждена поддержка {platform}."
+        if card:
+            message = f"По карточке Softline для «{item.title}» подтверждена поддержка {platform}."
+        return CatalogDecision("answer", message, context, options, sources)
     else:
-        value = item.term
-        if value is None and (verified := verified_term(item)):
-            term, source = verified
-            value = "бессрочная лицензия" if term == "perpetual" else f"{term} мес."
-            return CatalogDecision("answer", f"{item.title} · {value} по проверенным материалам.",
-                                   context, options, (*sources, source))
-        if value is None and card is not None and card.term:
-            return CatalogDecision("answer", f"{item.title} · срок лицензии по карточке — {card.term}.",
-                                   context, options, (*sources, card.source))
-        label = "Срок лицензии"
+        if card:
+            value = card.term
+            updates = {"term": value, "site_verified_fields": ("term",)}
+        else:
+            value = item.term
+            if item.term and (dispute := _conflict(item, context)):
+                return dispute
+            if value is None and article_term:
+                term, _ = article_term
+                value = "бессрочная лицензия" if term == "perpetual" else f"{term} мес."
+                return CatalogDecision("answer", f"{item.title} · {value} по проверенным материалам.",
+                                       context, options, sources)
     if value is None:
-        return CatalogDecision("clarify", f"В фиде нет данных по параметру «{label.lower()}» для «{item.title}». "
-                               "Менеджер может проверить этот параметр.", context, sources=sources)
-    answer = f"{item.title} · {label.lower()} по фиду от {item.snapshot_at} — {value}."
-    return CatalogDecision("answer", answer, context, options, sources)
+        return _unconfirmed(item, context, (*sources, *checked_sources), label)
+    origin = "по карточке Softline" if card else f"по фиду от {item.snapshot_at}"
+    answer = f"{item.title} · {label} {origin} — {value}."
+    return CatalogDecision("answer", answer, context, (replace(item, **updates),), sources)
+
+
+def _unconfirmed(
+    item: CatalogOffer, context: CatalogContext, sources: tuple[Source, ...], field: str,
+) -> CatalogDecision:
+    question = f"Подтвердить «{field}» для позиции {item.vendor_code or item.offer_id}."
+    return CatalogDecision("handoff", "", context, sources=tuple(dict.fromkeys(sources)), disputed_fact=question)
 
 
 def _duration(text: str | None) -> int | str | None:
@@ -801,32 +885,26 @@ def _duration(text: str | None) -> int | str | None:
     return _months(text or "")
 
 
-def _conflict(item: CatalogOffer, context: CatalogContext | None, fact: str | None = None) -> CatalogDecision | None:
+def _conflict(item: CatalogOffer, context: CatalogContext | None) -> CatalogDecision | None:
     card = offer_card(item)
-    disputed = commercial_dispute(item, card, fact) if card is not None else None
-    article_term = verified_term(item)
-    secondary = [article_term] if article_term else []
-    if card is not None:
-        secondary.append((_duration(card.term), card.source))
-    if not disputed and fact in (None, "term") and (feed_term := _duration(item.term)) is not None:
-        for term, source in secondary:
-            if term is not None and feed_term != term:
-                confirmed = "бессрочная" if term == "perpetual" else f"{term} мес."
-                disputed = (f"Срок лицензии {item.vendor_code or item.offer_id}: "
-                            f"{item.term} в фиде от {item.snapshot_at}, "
-                            f"{confirmed} в источнике «{source.title}».")
-                break
-    if disputed:
-        context = replace(context, shown_offers=(item.offer_id,)) if context else None
-        return CatalogDecision("handoff", "", context,
-                               sources=(*_sources((item,)), *(source for _, source in secondary)),
-                               disputed_fact=disputed)
-    return None
+    if card is not None and card.term and "term" not in card.conflicts:
+        return None
+    feed_term = _duration(item.term)
+    article = verified_term(item)
+    if feed_term is None or article is None or feed_term == article[0]:
+        return None
+    term, source = article
+    confirmed = "бессрочная" if term == "perpetual" else f"{term} мес."
+    disputed = (f"Срок лицензии {item.vendor_code or item.offer_id}: "
+                f"{item.term} в фиде от {item.snapshot_at}, "
+                f"{confirmed} в источнике «{source.title}».")
+    context = replace(context, shown_offers=(item.offer_id,)) if context else None
+    return CatalogDecision("handoff", "", context, sources=(*_sources((item,)), source), disputed_fact=disputed)
 
 
-def _validate_evidence(decision: CatalogDecision, fact: str | None = None) -> CatalogDecision:
+def _validate_evidence(decision: CatalogDecision) -> CatalogDecision:
     for item in decision.products:
-        if conflict := _conflict(item, decision.context, fact):
+        if conflict := _conflict(item, decision.context):
             return conflict
     if decision.outcome != "recommend":
         return decision
@@ -858,16 +936,22 @@ def _recommendation(item: CatalogOffer, quantity: int) -> Recommendation:
     return Recommendation(item.offer_id, edition, package, quantity, item.price * quantity, edition_source, package_source)
 
 
-def decide(index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogDecision:
+def decide(
+    index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str,
+    card_lookup: Callable[[CatalogOffer], OfferCardEvidence | None] | None = None,
+) -> CatalogDecision:
     patch = _keep_selection(previous, patch, text)
     if patch.action == "fact":
-        return _validate_evidence(_fact(index, previous, patch, text), patch.fact)
+        return _fact(index, previous, patch, text, card_lookup)
     if patch.action == "other":
         return CatalogDecision("clarify", "Назовите продукт или опишите задачу, для которой подбираете решение.", previous)
     context = _update(previous, patch, text)
     if context is None:
         return CatalogDecision("clarify", "Назовите продукт или опишите задачу, для которой подбираете решение.", context)
-    decision = _named(index, context) if context.mode == "named" else _recommend(index, context, text)
+    if context.mode == "named":
+        decision = _named(index, context, card_lookup=card_lookup, include_exact_card=True)
+    else:
+        decision = _recommend(index, context, text)
     if decision.outcome == "clarify" and context != previous and context.shown_offers:
         return replace(decision, context=replace(context, shown_offers=()))
     return _validate_evidence(decision)

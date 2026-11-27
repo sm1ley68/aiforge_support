@@ -20,6 +20,8 @@ class OfferCardEvidence:
     term: str | None = None
     price_rub: Decimal | None = None
     available: bool | None = None
+    platforms: tuple[str, ...] = ()
+    conflicts: frozenset[str] = frozenset()
 
 
 OFFER_CARDS = {
@@ -62,12 +64,15 @@ def verified_term(offer: CatalogOffer) -> tuple[int | str, Source] | None:
     return None
 
 
-def commercial_dispute(offer: CatalogOffer, card: OfferCardEvidence, fact: str | None) -> str | None:
-    # Older prices and stale availability are observations of a different point in time.
+def current_card(offer: CatalogOffer, card: OfferCardEvidence) -> bool:
     try:
-        if date.fromisoformat(card.source.version) < date.fromisoformat(offer.snapshot_at[:10]):
-            return None
+        return date.fromisoformat(card.source.version) >= date.fromisoformat(offer.snapshot_at[:10])
     except ValueError:
+        return False
+
+
+def commercial_dispute(offer: CatalogOffer, card: OfferCardEvidence, fact: str | None) -> str | None:
+    if not current_card(offer, card):
         return None
     if (fact in (None, "price") and offer.currency == "RUB" and offer.price is not None
             and card.price_rub is not None and offer.price != card.price_rub):

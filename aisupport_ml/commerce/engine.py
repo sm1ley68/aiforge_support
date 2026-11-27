@@ -10,12 +10,13 @@ from sqlite3 import DatabaseError
 from time import monotonic
 
 from ..contracts import IntentModel, TemporaryReadError
-from .catalog import SoftlineCatalog
+from .catalog import CatalogOffer, SoftlineCatalog
 from .contracts import (
     CartLine, Customer, Document, Handoff, Message, ModelCall, OrderRecord,
     PendingConsultation, PendingProduct, Product, Seller, Source, State, Trace, TurnResult,
 )
 from .documents import build_document
+from .edo import edo_answer
 from .extraction import (
     PROMPT_VERSION, RANK_SCHEMA, RANK_SYSTEM, SCHEMA, SYSTEM, Extraction, LineChange, parse_extraction,
 )
@@ -24,6 +25,7 @@ from .indexed_chat import (
     desktop_input, direct_sku, fallback_input, is_origin_follow_up, last_offer_sources, parse_catalog_input,
     verified_named_input,
 )
+from .offer_evidence import OfferCardEvidence
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
 from .routing import explicit_handoff_requested
 from .support_answers import SUPPORT_ANSWERS, support_request
@@ -68,11 +70,13 @@ class CommerceAgent:
         orders: Sequence[OrderRecord] = (), conditions: Sequence[Source] = (),
         seller: Seller | None = None, search: Callable | None = None, model_timeout: float = 18,
         catalog_index: SoftlineCatalog | None = None,
+        card_lookup: Callable[[CatalogOffer], OfferCardEvidence | None] | None = None,
     ):
         self.model = model
         if catalog_index is not None and products:
             raise ValueError("Use either the indexed catalog or in-memory products")
         self.catalog_index = catalog_index
+        self.card_lookup = card_lookup
         self.products = {product.sku: product for product in products}
         if len(self.products) != len(products):
             raise ValueError("Duplicate catalog SKU")
@@ -167,6 +171,9 @@ class _Turn:
         return self.clarification(f"Уточните позицию по номеру варианта или артикулу.\n{choices}")
 
     async def run(self):
+        if not explicit_handoff_requested(self.text) and (answer := edo_answer(self.text)):
+            text, sources = answer
+            return TurnResult("answer", text, self.state, sources)
         if self.agent.catalog_index is not None:
             return await self.run_indexed(self.agent.catalog_index)
         pending_consult = self.state.consultation
@@ -280,7 +287,7 @@ class _Turn:
         except (DatabaseError, OSError):
             return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
         try:
-            decision = await asyncio.to_thread(decide, index, context, patch, self.text)
+            decision = await asyncio.to_thread(decide, index, context, patch, self.text, self.agent.card_lookup)
         except (DatabaseError, OSError):
             return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
         self.state = replace(self.state, catalog_context=decision.context)

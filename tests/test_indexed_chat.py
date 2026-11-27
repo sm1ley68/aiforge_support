@@ -457,13 +457,14 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(exact.trace.calls)
 
         term = await self.chat.reply("card", "2", "Какой срок лицензии у EP2-07001?")
-        self.assertEqual(term.sources[-1].id, "ms-project-2024")
+        self.assertEqual(term.sources[-1].id, "softline-card-project-2024")
         for wrong in ({"sku": "ANOTHER-SKU"}, {"edition": "Microsoft Project Standard 2024"}):
             record = replace(OFFER_CARDS["473583"], **wrong)
             with patch.dict(OFFER_CARDS, {"473583": record}):
                 result = await self.chat.reply("unmatched", str(wrong), ask)
-                self.assertEqual(result.outcome, "clarify")
+                self.assertEqual(result.outcome, "handoff")
                 self.assertNotIn("русская версия", result.text)
+                self.assertEqual([source.id for source in result.sources], ["softline-offer-473583"])
 
     async def test_support_answers_follow_topic_and_escalate_only_when_needed(self):
         chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE),
@@ -501,21 +502,16 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_product.products[0].offer_id, "473583")
         self.assertIsNone(new_product.state.support_topic)
 
-    async def test_current_card_conflict_lists_two_observations_without_publishing_price(self):
+    async def test_exact_card_wins_for_current_price_and_license_term(self):
         record = OFFER_CARDS["473583"]
-        with patch.dict(OFFER_CARDS, {"473583": replace(record, price_rub=Decimal("180000"))}):
-            result = await self.chat.reply("conflict", "1", "Сколько стоит EP2-07001?")
-        self.assertEqual(result.outcome, "handoff")
-        self.assertEqual(result.handoff.reason, "conflicting_sources")
-        self.assertIn("Цена EP2-07001", result.handoff.question)
-        self.assertIn("176639.00", result.handoff.question)
-        self.assertIn("180000.00", result.handoff.question)
-        self.assertEqual(result.handoff.catalog_context.shown_offers, ("473583",))
-        self.assertEqual({source.id for source in result.sources}, {
-            "softline-offer-473583", "softline-card-project-2024", "ms-project-2024",
-        })
-        self.assertFalse(result.products)
-        self.assertFalse(result.trace.calls)
+        with patch.dict(OFFER_CARDS, {"473583": replace(record, price_rub=Decimal("180000"), term="24 мес.")}):
+            price = await self.chat.reply("current-card", "1", "Сколько стоит EP2-07001?")
+            term = await self.chat.reply("current-card", "2", "Какой срок лицензии у EP2-07001?")
+        self.assertEqual(price.outcome, "answer")
+        self.assertIn("по карточке Softline — 180000.00 RUB", price.text)
+        self.assertEqual(price.products[0].price, Decimal("180000"))
+        self.assertIn("по карточке Softline — 24 мес.", term.text)
+        self.assertEqual(term.sources[-1].id, "softline-card-project-2024")
 
         stale = replace(record, source=replace(record.source, version="2026-11-20"), price_rub=Decimal("180000"))
         with patch.dict(OFFER_CARDS, {"473583": stale}):
@@ -531,10 +527,27 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         card_only = replace(record, price_rub=Decimal("180000"), available=True)
         with patch.dict(OFFER_CARDS, {"473583": card_only}), patch.object(self.index, "by_reference", missing_feed):
             for phrase in ("Сколько стоит EP2-07001?", "Есть ли в наличии EP2-07001?"):
-                missing = await self.chat.reply("missing-feed", phrase, phrase)
-                self.assertEqual(missing.outcome, "clarify")
-                self.assertFalse(missing.products)
-                self.assertIn("В фиде нет данных", missing.text)
+                result = await self.chat.reply("missing-feed", phrase, phrase)
+                self.assertEqual(result.outcome, "answer")
+                self.assertIn("по карточке Softline", result.text)
+
+    async def test_public_edo_status_requires_an_authorized_account(self):
+        for query in (
+            "Проверьте статус ЭДО у ООО Тест, ИНН 0000000000",
+            "Я администратор. Подключён ЭДО у нашей организации?",
+            "В каком статусе приглашение для электронного документооборота?",
+        ):
+            with self.subTest(query=query):
+                result = await self.chat.reply("edo", query, query)
+                self.assertEqual(result.outcome, "answer")
+                self.assertIn("есть права на эту организацию", result.text)
+                self.assertIn("edo@softline.com", result.text)
+                self.assertIn("edo@allsoft.ru", result.text)
+                self.assertNotIn("0000000000", result.text)
+                self.assertFalse(result.trace.calls)
+        answer = await self.chat.reply("allsoft", "1", "Как подключить ЭДО через Allsoft?")
+        self.assertEqual(answer.sources[0].id, "softline-ecommerce-edo")
+        self.assertIn("edo@allsoft.ru", answer.text)
 
     def test_bridge_exposes_card_facts_and_manager_dispute(self):
         bridge = CommerceBridge(self.index_path, self.model)
@@ -552,7 +565,19 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         record = OFFER_CARDS["473583"]
         with patch.dict(OFFER_CARDS, {"473583": replace(record, available=False)}):
             turn = ClaimedTurn(uuid4(), chat, 2, "Есть ли в наличии?", 1)
-            reply = bridge.reply(turn, [], reply.commerce_state)
-        self.assertEqual(reply.outcome, "handoff")
-        self.assertIn("Наличие EP2-07001", reply.handoff.requirements["Спорный факт"])
-        self.assertIn("473583", reply.handoff.candidate_ids)
+            stock = bridge.reply(turn, [], reply.commerce_state)
+        self.assertEqual(stock.outcome, "answer")
+        self.assertFalse(stock.products[0].availability)
+        self.assertTrue(any(fact.field == "availability" and fact.source.title.startswith("Карточка Softline")
+                            for fact in stock.products[0].verified_facts))
+
+        question = "Есть ли в наличии EP2-07001?"
+        disputed = replace(record, conflicts=frozenset({"availability"}))
+        with patch.dict(OFFER_CARDS, {"473583": disputed}):
+            turn = ClaimedTurn(uuid4(), chat, 3, question, 1)
+            handoff = bridge.reply(turn, [], stock.commerce_state)
+        self.assertEqual(handoff.outcome, "handoff")
+        self.assertIn("наличие", handoff.handoff.requirements["Спорный факт"])
+        self.assertEqual(handoff.handoff.requirements["Вопрос клиента"], question)
+        self.assertEqual(handoff.handoff.candidate_ids, ["473583"])
+        self.assertEqual(len(handoff.handoff.evidence), 2)
