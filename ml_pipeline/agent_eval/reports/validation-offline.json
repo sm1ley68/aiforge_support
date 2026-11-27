@@ -1,0 +1,155 @@
+{
+  "dataset": "softline-storefront-validation-2026-11-27",
+  "case_count": 5,
+  "turn_count": 14,
+  "failed_turns": 0,
+  "p50_ms": 15,
+  "p95_ms": 1852,
+  "report_elapsed_ms": 2600,
+  "cases": [
+    {
+      "case": "named-closest-renewal",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 1852,
+          "failures": [],
+          "egress": [
+            "blocked:disabled"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 479,
+          "failures": [],
+          "egress": [
+            "blocked:disabled"
+          ]
+        },
+        {
+          "step": 3,
+          "outcome": "answer",
+          "elapsed_ms": 37,
+          "failures": [],
+          "egress": [
+            "blocked:disabled"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "mail-and-files-at-36",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "recommend",
+          "elapsed_ms": 66,
+          "failures": [],
+          "egress": [
+            "blocked:disabled"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 17,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "handoff",
+          "elapsed_ms": 15,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "pdf annual and changes",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "recommend",
+          "elapsed_ms": 15,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "clarify",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "documents-without-model",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "answer",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 15,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "answer",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "synthetic-sensitive-context",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "handoff",
+          "elapsed_ms": 15,
+          "failures": [],
+          "egress": [
+            "blocked:disabled"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "handoff",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    }
+  ],
+  "passed_cases": 5,
+  "provider_usage": {
+    "calls": 0,
+    "successful_calls": 0,
+    "calls_without_token_counts": 0,
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "estimated_cost_rub": null
+  },
+  "mode": "offline",
+  "manifest_sha256": "3a67f0d8d08af1fe693308f7f0c4642f5c9350e892357604ee0062ed93933fbf"
+}

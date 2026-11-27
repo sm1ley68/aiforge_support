@@ -1,0 +1,31 @@
+{
+  "dataset": "softline-storefront-acceptance-2026-11-27",
+  "cases": [
+    {"id": "named messaging transition", "turns": [
+      {"text": "Нужен MDaemon Standard на 59 пользователей", "outcomes": ["clarify"], "source_urls": ["https://mdaemon.com/products/mdaemon-email-server"]},
+      {"text": "Покажите без фильтра по редакции", "outcomes": ["answer"], "offer_ids_contain": ["19580", "19591", "19602"]},
+      {"text": "Лицензия уже просрочена", "outcomes": ["answer"], "offer_ids_contain": ["19602"]},
+      {"text": "А сколько стоит?", "outcomes": ["answer"], "offer_ids_contain": ["19602"], "sources": true}
+    ]},
+    {"id": "known product and platform", "turns": [
+      {"text": "Нужен Microsoft Project Professional 2024", "outcomes": ["answer"], "offer_ids_contain": ["473583"]},
+      {"text": "Совместим ли с Windows 10?", "outcomes": ["answer"], "offer_ids_contain": ["473583"], "sources": true},
+      {"text": "Работает ли на Linux?", "outcomes": ["clarify"]}
+    ]},
+    {"id": "desktop budget limit", "turns": [
+      {"text": "Нужно планирование проектов для 5 сотрудников", "outcomes": ["clarify"]},
+      {"text": "5 ПК на Windows 11, бюджет до 900000 рублей", "outcomes": ["recommend"], "offer_ids_contain": ["473583"], "text_contains": ["883195.00 RUB за 5 ПК"], "sources": true},
+      {"text": "Бюджет до 800000 рублей", "outcomes": ["clarify"]},
+      {"text": "Нужен оператор", "outcomes": ["handoff"], "manager": true}
+    ]},
+    {"id": "store self service", "turns": [
+      {"text": "Можно оплатить по безналу?", "outcomes": ["answer"], "source_urls": ["https://store.softline.ru/delivery_info/"]},
+      {"text": "Где найти счёт в личном кабинете?", "outcomes": ["answer"], "source_urls": ["https://docs.softline.com/ru-ru/lk/invoices"]},
+      {"text": "Где скачать дистрибутив?", "outcomes": ["answer"], "source_urls": ["https://docs.softline.com/ru-ru/lk/fulfillment"]}
+    ]},
+    {"id": "expanded security price tier", "turns": [
+      {"text": "Чтобы защитить почту и файлы, подбираем решение для Exchange и Windows Server 2019. Локально, 45 узлов, бюджет до 540 тысяч рублей.", "outcomes": ["recommend"], "skus": ["KL4869RAPFS", "KL4869RAPDS"], "sources": true, "egress": "allowed"},
+      {"text": "А российский аналог?", "outcomes": ["recommend"], "skus": ["KL4869RAPFS", "KL4869RAPDS"], "sources": true}
+    ]}
+  ]
+}

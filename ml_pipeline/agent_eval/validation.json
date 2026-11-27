@@ -1,0 +1,29 @@
+{
+  "dataset": "softline-storefront-validation-2026-11-27",
+  "cases": [
+    {"id": "named-closest-renewal", "turns": [
+      {"text": "Интересует MDaemon Standard для 48 сотрудников", "outcomes": ["clarify"], "source_urls": ["https://mdaemon.com/products/mdaemon-email-server"]},
+      {"text": "Покажите без фильтра по редакции", "outcomes": ["answer"], "offer_ids_contain": ["19579", "19590", "19601"]},
+      {"text": "Продлить действующую подписку", "outcomes": ["answer"], "offer_ids_contain": ["19590"], "text_contains": ["продление"]}
+    ]},
+    {"id": "mail-and-files-at-36", "turns": [
+      {"text": "Для нового филиала потребуется защитить почту и файлы на 36 устройствах. Exchange, Windows Server 2019, локально. Бюджет до 300000 рублей.", "outcomes": ["recommend"], "skus": ["KL4869RAPFS"], "sources": true, "egress": "allowed"},
+      {"text": "Есть ли в наличии?", "outcomes": ["answer"], "offer_ids_contain": ["5065"], "text_contains": ["доступно"]},
+      {"text": "Позовите менеджера, пожалуйста.", "outcomes": ["handoff"], "manager": true}
+    ]},
+    {"id": "pdf annual and changes", "turns": [
+      {"text": "Нужен редактор PDF для фирмы", "outcomes": ["clarify"], "text_contains": ["версия ОС"]},
+      {"text": "Windows 10, 2 компьютера, на год", "outcomes": ["recommend"], "offer_ids_contain": ["541424"], "text_contains": ["5600.00 RUB за 2 ПК"], "sources": true},
+      {"text": "Только облако", "outcomes": ["clarify"], "text_contains": ["рабочие компьютеры"]}
+    ]},
+    {"id": "documents-without-model", "turns": [
+      {"text": "А где же скачать счёт на оплату?", "outcomes": ["answer", "clarify", "handoff"]},
+      {"text": "Подскажите, где найти ключ активации после покупки?", "outcomes": ["answer"], "source_urls": ["https://docs.softline.com/ru-ru/lk/fulfillment"]},
+      {"text": "Как скачать УПД по заказу?", "outcomes": ["answer"], "source_urls": ["https://docs.softline.com/ru-ru/lk/closing-documents"]}
+    ]},
+    {"id": "synthetic-sensitive-context", "turns": [
+      {"text": "В переписке есть диагноз. Что посоветуете для 10 ПК с Windows 11?", "outcomes": ["handoff", "clarify"], "egress": "blocked"},
+      {"text": "Позовите менеджера, пожалуйста.", "outcomes": ["handoff"], "manager": true}
+    ]}
+  ]
+}

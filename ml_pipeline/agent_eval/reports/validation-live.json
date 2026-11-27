@@ -1,0 +1,156 @@
+{
+  "dataset": "softline-storefront-validation-2026-11-27",
+  "case_count": 5,
+  "turn_count": 14,
+  "failed_turns": 0,
+  "p50_ms": 14,
+  "p95_ms": 2664,
+  "report_elapsed_ms": 3417,
+  "cases": [
+    {
+      "case": "named-closest-renewal",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 505,
+          "failures": [],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 41,
+          "failures": [],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        },
+        {
+          "step": 3,
+          "outcome": "answer",
+          "elapsed_ms": 43,
+          "failures": [],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        }
+      ]
+    },
+    {
+      "case": "mail-and-files-at-36",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "recommend",
+          "elapsed_ms": 2664,
+          "failures": [],
+          "egress": [
+            "allowed:technical_fields",
+            "api_response:http_200"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 15,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "handoff",
+          "elapsed_ms": 16,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "pdf annual and changes",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "recommend",
+          "elapsed_ms": 16,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "clarify",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "documents-without-model",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "answer",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "answer",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "synthetic-sensitive-context",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "handoff",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "handoff",
+          "elapsed_ms": 12,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    }
+  ],
+  "passed_cases": 5,
+  "provider_usage": {
+    "calls": 1,
+    "successful_calls": 1,
+    "calls_without_token_counts": 0,
+    "prompt_tokens": 798,
+    "completion_tokens": 170,
+    "estimated_cost_rub": null
+  },
+  "mode": "live",
+  "manifest_sha256": "3a67f0d8d08af1fe693308f7f0c4642f5c9350e892357604ee0062ed93933fbf"
+}

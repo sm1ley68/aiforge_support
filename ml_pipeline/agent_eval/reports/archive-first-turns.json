@@ -1,0 +1,12 @@
+{
+  "sample": 43,
+  "mode": "offline",
+  "provider_calls": 0,
+  "outcomes_by_reference_route": {
+    "find_named_product": {"handoff": 7},
+    "answer_product_question": {"handoff": 31},
+    "clarify": {"handoff": 3},
+    "recommend_by_need": {"handoff": 1},
+    "handoff": {"handoff": 1}
+  }
+}
