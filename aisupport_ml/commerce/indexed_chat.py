@@ -94,6 +94,19 @@ _NEW_SELECTION = re.compile(
 )
 _BACKUP_REFINEMENT = re.compile(r"^(?:образ\w*|бессроч\w*|копи\w*|только|файл\w*|папк\w*|\d)", re.I)
 _NAMED_LOOKUP = re.compile(r"^(?:нуж(?:ен|на|ны|но)|интересует|ищу|хочу купить|найди)\s+(.{2,100})$", re.I)
+_NAMED_SEATS = re.compile(
+    rf"(?:\s+(?:на|для)\s+|[,;]\s*){_USER_COUNT.pattern}"
+    rf"(?:[\s,;]+(?:{_CLEAR_EDITION.pattern}))?$",
+    re.I,
+)
+_NAMED_FOLLOW_UP = re.compile(
+    rf"(?:(?:покажите|покажи|можно)\s+)?(?:{_CLEAR_EDITION.pattern})"
+    rf"|(?:(?:на|для)\s+)?{_USER_COUNT.pattern}"
+    r"|нужна новая лицензия|покупаем впервые"
+    r"|(?:(?:хочу\s+)?продлить|возобновить)\s+(?:(?:действующ\w*|просроч\w*)\s+)?(?:лицензи\w*|подписк\w*)"
+    r"|(?:лицензия|подписка)\s+(?:уже\s+)?(?:просрочен\w*|ист[её]к(?:ла|ло)?)",
+    re.I,
+)
 _LICENSE_REQUESTS = (
     ("expired", re.compile(r"\b(?:просроч\w*|ист[её]к(?:ла|ли|ло)?|возобнов\w*)\b", re.I)),
     ("renew", re.compile(r"\b(?:продл\w*|действующ\w+\s+(?:лицензи\w*|подписк\w*))\b", re.I)),
@@ -252,15 +265,27 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
     return None
 
 
-def verified_named_input(index: SoftlineCatalog, text: str) -> CatalogInput | None:
-    match = _NAMED_LOOKUP.fullmatch(text.strip(" ?!."))
+def verified_named_input(index: SoftlineCatalog, text: str, context: CatalogContext | None) -> CatalogInput | None:
+    request = " ".join(text.split()).strip(" ?!.")
+    if context is not None and context.mode == "named" and _NAMED_FOLLOW_UP.fullmatch(request):
+        return CatalogInput("continue")
+
+    match = _NAMED_LOOKUP.fullmatch(request)
     if match is None:
-        return None
-    name = match[1].strip()
+        alias = _DEMO_NAMED.match(request)
+        if alias is None or alias.start(1) != 0:
+            return None
+    name = match[1] if match else request
+    if seats := _NAMED_SEATS.search(name):
+        name = name[:seats.start()].strip()
     if _GENERIC_PURPOSE.fullmatch(name) or _requested_license(name):
         return None
-    # A product name must match the index as a complete phrase.
-    return CatalogInput("named", product=name) if index.has_title_phrase(name) else None
+    edition = _EDITION_SUFFIX.search(name)
+    title = name[:edition.start()] if edition else name
+    # Verify the product independently of a requested edition, which the feed may not confirm.
+    if index.has_title_phrase(title):
+        return CatalogInput("named", product=title, edition=edition[1] if edition else None)
+    return None
 
 
 def _keep_selection(previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogInput:

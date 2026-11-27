@@ -253,7 +253,7 @@ class _Turn:
                 patch = desktop
             elif (backup := backup_input(self.text, context)) is not None:
                 patch = backup
-            elif (named := await asyncio.to_thread(verified_named_input, index, self.text)) is not None:
+            elif (named := await asyncio.to_thread(verified_named_input, index, self.text, context)) is not None:
                 patch = named
             else:
                 raw = await self.model_call("extract_catalog", INDEXED_SYSTEM, {

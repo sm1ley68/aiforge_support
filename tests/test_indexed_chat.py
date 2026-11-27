@@ -83,20 +83,37 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase([]), catalog_index=self.index))
 
     async def test_smallest_sufficient_seat_package_keeps_license_types_distinct(self):
-        self.model.expect("named", product="MDaemon")
         compared = await self.chat.reply("seats", "1", "Нужен MDaemon на 49 пользователей")
         self.assertEqual({offer.offer_id for offer in compared.products}, {"19579", "19590", "19601"})
         self.assertTrue(all(offer.user_limit == 50 for offer in compared.products))
 
-        self.model.expect("continue")
         new = await self.chat.reply("seats", "2", "Нужна новая лицензия")
         self.assertEqual([offer.offer_id for offer in new.products], ["19579"])
-        self.model.expect("continue")
         expired = await self.chat.reply("seats", "3", "Продлить просроченную подписку")
         self.assertEqual([offer.offer_id for offer in expired.products], ["19601"])
 
+    async def test_named_product_keeps_edition_and_seats_before_extraction(self):
+        requested = await self.chat.reply("named", "1", "Интересует MDaemon Messaging Server Standard, 46 сотрудников")
+        context = requested.state.catalog_context
+        self.assertEqual(requested.outcome, "clarify")
+        self.assertEqual((context.mode, context.product, context.edition, context.users),
+                         ("named", "MDaemon Messaging Server", "Standard", 46))
+        self.assertFalse(requested.products)
+
+        compared = await self.chat.reply("named", "2", "Можно без привязки к редакции?")
+        self.assertEqual(compared.state.catalog_context.users, 46)
+        self.assertIsNone(compared.state.catalog_context.edition)
+        self.assertEqual({offer.offer_id for offer in compared.products}, {"19579", "19590", "19601"})
+
+        expired = await self.chat.reply("named", "3", "Подписка уже истекла")
+        self.assertEqual([offer.offer_id for offer in expired.products], ["19601"])
+        price = await self.chat.reply("named", "4", "А сколько это стоит?")
+        self.assertEqual(price.outcome, "answer")
+        self.assertEqual([offer.offer_id for offer in price.products], ["19601"])
+        self.assertIn(f"{expired.products[0].price:.2f} RUB", price.text)
+        self.assertTrue(all(not result.trace.calls for result in (requested, compared, expired, price)))
+
     async def test_unknown_edition_then_mdaemon_comparison_and_exact_sku(self):
-        self.model.expect("named", product="MDaemon")
         unknown = await self.chat.reply("md", "1", "Нужен MDaemon Standard на 50 пользователей")
         self.assertEqual(unknown.outcome, "clarify")
         self.assertIn("«Standard»", unknown.text)
@@ -104,7 +121,6 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unknown.state.catalog_context.users, 50)
         self.assertEqual(unknown.sources[0].url, "https://mdaemon.com/products/mdaemon-email-server")
 
-        self.model.expect("named", product="MDaemon Messaging Server")
         matched = await self.chat.reply("md", "2", "MDaemon Messaging Server на 50 пользователей, без привязки к редакции")
         self.assertEqual(matched.outcome, "answer")
         self.assertTrue({"19579", "19590", "19601"} <= {offer.offer_id for offer in matched.products})
@@ -181,7 +197,7 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         unknown = await chat.reply("md", "1", "Нужен MDaemon Standard на 50 пользователей")
         self.assertEqual(unknown.outcome, "clarify")
         self.assertIn("«Standard»", unknown.text)
-        self.assertEqual(unknown.trace.calls[0].error, "TemporaryReadError")
+        self.assertFalse(unknown.trace.calls)
         relaxed = await chat.reply("md", "unfiltered", "Покажите без фильтра по редакции")
         self.assertEqual(relaxed.outcome, "answer")
         self.assertEqual(relaxed.state.catalog_context.users, 50)
@@ -251,7 +267,6 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("наличие по фиду", fact.text)
         self.assertEqual([source.sku for source in fact.sources], ["19579"])
 
-        self.model.expect("named", product="MDaemon Messaging Server")
         multiple = await self.chat.reply("price", "4", "MDaemon Messaging Server на 50 пользователей")
         self.assertGreater(len(multiple.products), 1)
         choice = await self.chat.reply("price", "5", "А сколько стоит?")
