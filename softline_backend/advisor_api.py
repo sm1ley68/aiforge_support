@@ -15,6 +15,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .knowledge import validated_url
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound
+from .support_hours import SupportHours
 
 
 logger = logging.getLogger(__name__)
@@ -153,9 +154,12 @@ def _requirements(result: dict) -> list[dict]:
 
 def _product(card: dict, recommended: bool) -> dict:
     details = []
-    if card.get("price_amount") is not None and card.get("currency"):
-        details.append(f"Цена по снимку — {card['price_amount']} {card['currency']}.")
     facts = {fact["field"]: fact["value"] for fact in card.get("verified_facts", [])}
+    if card.get("price_amount") is not None and card.get("currency"):
+        origin = "по карточке" if facts.get("price_origin") == "Карточка Softline" else "по снимку"
+        details.append(f"Цена {origin} — {card['price_amount']} {card['currency']}.")
+    if "vat" in facts:
+        details.append(f"{facts['vat']}.")
     for key, label in (
         ("package_size", "Размер пакета"), ("license_quantity", "Число лицензий"), ("total_price", "Итого"),
         ("term", "Срок"), ("license_type", "Лицензия"), ("user_limit", "Лимит пользователей"),
@@ -230,8 +234,19 @@ def _operator_request(row: dict) -> dict:
     return view
 
 
-def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
+def advisor_router(store: ChatStore, manager_token: str | None, hours: SupportHours) -> APIRouter:
     router = APIRouter(prefix="/api")
+
+    @router.get("/support/availability")
+    def availability(response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return hours.status()
+
+    def consultation_view(snapshot, handle):
+        view = _present(snapshot, handle)
+        if (snapshot["result"] or {}).get("outcome") == "handoff":
+            view["support"] = hours.status()
+        return view
 
     @router.post("/consultation")
     async def consult(body: ConsultationInput, response: Response):
@@ -262,7 +277,7 @@ def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
             turn = await run_in_threadpool(store.get_turn, chat_id, token, turn_id)
             if turn is not None and turn.status == "succeeded":
                 snapshot = await run_in_threadpool(store.consultation_snapshot, chat_id, token, turn_id)
-                return _present(snapshot, handle)
+                return consultation_view(snapshot, handle)
             if turn is not None and turn.status == "failed":
                 raise HTTPException(503, detail={
                     "message": "Turn failed", "conversationId": handle, "turnId": str(turn_id),
@@ -285,7 +300,7 @@ def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
         if snapshot["status"] != "succeeded":
             raise HTTPException(409, "Turn is not complete", headers=headers)
         response.headers.update(headers)
-        view = _present(snapshot, str(chat_id))
+        view = consultation_view(snapshot, str(chat_id))
         if "quote" in view:
             quote_url = f"/chats/{chat_id}/turns/{turn_id}/quote"
             view["quote"]["downloadUrl"] = quote_url

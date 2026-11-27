@@ -17,6 +17,7 @@ from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewC
 from .quotes import render_quote
 from .readiness import ProviderStatus, catalog_status, commerce_snapshot_at
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
+from .support_hours import SupportHours
 
 
 bearer = HTTPBearer(auto_error=False)
@@ -41,9 +42,11 @@ def create_app(
     commerce_index: Path | None = None,
     provider_status: ProviderStatus = "deterministic",
     advisor_dist: Path | None = None,
+    support_hours: SupportHours | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Softline Chat API")
-    app.include_router(advisor_router(store, manager_token))
+    hours = support_hours or SupportHours()
+    app.include_router(advisor_router(store, manager_token, hours))
     app.mount("/demo", StaticFiles(directory=demo), name="demo")
     if advisor_dist is not None:
         app.mount("/assets", StaticFiles(directory=advisor_dist / "assets"), name="advisor-assets")
@@ -137,6 +140,8 @@ def create_app(
             raise HTTPException(404, "Chat not found") from None
         if turn is None:
             raise HTTPException(404, "Turn not found")
+        if turn.outcome == "handoff":
+            return turn.model_copy(update={"support": hours.status()})
         return turn
 
     @app.put("/chats/{chat_id}/turns/{turn_id}/quote/customer", response_model=QuoteSnapshot)
@@ -198,4 +203,5 @@ def app_from_env() -> FastAPI:
         commerce_index=Path(commerce_path) if commerce_path else None,
         provider_status="configured" if provider_configured else "deterministic",
         advisor_dist=Path(advisor_path) if advisor_path else None,
+        support_hours=SupportHours.from_env(),
     )

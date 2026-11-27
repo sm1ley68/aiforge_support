@@ -104,6 +104,8 @@ class QuoteSnapshot(BaseModel):
     customer: QuoteCustomer | None = None
     customer_saved_at: datetime | None = None
     delivery_status: Literal["available", "requires_confirmation"] = "available"
+    price_origin_label: Literal["Снимок фида", "Карточка Softline"] = "Снимок фида"
+    vat_label: str | None = None
 
 
 class TurnResult(BaseModel):
@@ -132,6 +134,7 @@ class TurnView(BaseModel):
     products: list[ProductCard] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
     quote: QuoteSnapshot | None = None
+    support: dict[str, JsonValue] | None = None
     error: str | None = None
 
 

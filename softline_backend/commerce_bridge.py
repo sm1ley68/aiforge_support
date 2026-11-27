@@ -16,6 +16,7 @@ from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
 from aisupport_ml.commerce.contracts import CatalogContext, Message, Recommendation, State
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
+from aisupport_ml.commerce.offer_evidence import commercial_dispute, offer_card
 from aisupport_ml.commerce.retrieval import KnowledgeBase
 from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE, PACKAGES, desktop_evidence
 from aisupport_ml.contracts import IntentModel, TemporaryReadError
@@ -27,7 +28,8 @@ from .ollama_profile import ENDPOINTS as OLLAMA_ENDPOINTS, PROFILE as OLLAMA_PRO
 from .polza_egress import (
     ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, check_transport_request, load_egress_filter, polza_scope, prepare, record,
 )
-from .quotes import QUOTE_REQUEST
+from .quotes import QUOTE_REQUEST, discount_response
+from .site_card import fetch_terms
 from .store import ClaimedTurn
 
 
@@ -170,7 +172,8 @@ def _requirements(context: CatalogContext | None) -> dict[str, str]:
 
 
 class CommerceBridge:
-    def __init__(self, index_path: Path, model: IntentModel, *, model_timeout: int = 6):
+    def __init__(self, index_path: Path, model: IntentModel, *, model_timeout: int = 6, verify_site: bool = False):
+        self.verify_site = verify_site
         self.agent = CommerceAgent(
             model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=model_timeout
         )
@@ -217,13 +220,34 @@ class CommerceBridge:
                 elif unit.startswith("лицензи") and offer.user_limit in (None, 1):
                     unit_label = "лиц."
             if card is not None and card.availability is not None and card.price_amount and card.currency and unit_label:
-                price = card.price_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                terms = fetch_terms(offer) if self.verify_site else None
+                verified = offer_card(offer) if terms is None else None
+                dispute = commercial_dispute(offer, verified, "price") if verified else None
+                if (terms and (terms.conflicting_price or terms.currency != card.currency)) or dispute:
+                    source = Source(title=card.title, url=card.url)
+                    return TurnResult(
+                        outcome="handoff", text="Передал менеджеру запрос на проверку цены перед выдачей КП.",
+                        sources=[source], commerce_state=persisted_state,
+                        handoff=HandoffDetails(
+                            reason="commercial_terms", summary="Сверить цену позиции",
+                            requirements={
+                                "quantity": str(count), "Позиция": card.title,
+                                "Спорный факт": dispute or "Не удалось подтвердить единую цену и валюту в карточке.",
+                            },
+                            candidate_ids=[card.offer_id], evidence=[source],
+                        ),
+                    )
+                price = (terms.price if terms and terms.price is not None else card.price_amount).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP,
+                )
                 quote = QuoteSnapshot(
                     offer_id=card.offer_id, sku=card.sku, title=card.title, quantity=count, unit_label=unit_label,
                     unit_price=price, total=price * count, currency=card.currency,
                     catalog_snapshot_at=card.snapshot_at, issued_at=datetime.now(timezone.utc),
                     source=Source(title=card.title, url=card.url),
                     delivery_status="available" if card.availability else "requires_confirmation",
+                    price_origin_label="Карточка Softline" if terms else "Снимок фида",
+                    vat_label=terms.vat_label if terms else None,
                 )
                 delivery_check = None
                 reply = f"Итого {quote.total:.2f} {quote.currency}. Заполните реквизиты заказчика для скачивания КП."
@@ -234,9 +258,15 @@ class CommerceBridge:
                         candidate_ids=[card.offer_id], evidence=[quote.source],
                     )
                     reply += " Поставка требует подтверждения. Передал менеджеру позицию и количество."
+                quote_facts = [*card.verified_facts]
+                if terms is not None:
+                    quote_facts.append(VerifiedFact(field="price_origin", value=quote.price_origin_label, source=quote.source))
+                    if quote.vat_label:
+                        quote_facts.append(VerifiedFact(field="vat", value=quote.vat_label, source=quote.source))
                 return TurnResult(
                     outcome="handoff" if delivery_check else "answer", text=reply,
-                    products=[card], sources=[quote.source], quote=quote, handoff=delivery_check,
+                    products=[card.model_copy(update={"price_amount": price, "verified_facts": quote_facts})],
+                    sources=[quote.source], quote=quote, handoff=delivery_check,
                     commerce_state=persisted_state,
                 )
         return TurnResult(
@@ -254,6 +284,13 @@ class CommerceBridge:
         state = STATE.validate_python(persisted_state) if persisted_state is not None else State()
         messages = tuple(Message("customer" if entry.role == "user" else "agent", entry.text) for entry in history)
         text = turn.message_text
+        if discount := discount_response(text):
+            context = state.catalog_context
+            if discount.handoff is not None and context is not None:
+                discount.handoff.requirements = _requirements(context)
+                discount.handoff.candidate_ids = list(context.shown_offers)
+            discount.commerce_state = persisted_state
+            return discount
         if match := QUOTE_REQUEST.fullmatch(text.strip()):
             return self.quote(match, state.catalog_context, persisted_state)
         direct_id = OFFER_ID.fullmatch(text.strip())
@@ -337,13 +374,17 @@ def commerce_from_env() -> CommerceBridge | None:
     if not path:
         return None
     profile = _profile_from_env()
+    verify_site = os.getenv("COMMERCE_VERIFY_SITE_CARD", "") == "real"
     if profile == OLLAMA_PROFILE:
         _, checker = load_egress_filter(enabled=True)
-        return CommerceBridge(Path(path), LocalCatalogModel(_ollama_url(), checker), model_timeout=40)
+        return CommerceBridge(Path(path), LocalCatalogModel(_ollama_url(), checker), model_timeout=40, verify_site=verify_site)
     key = commerce_provider_key()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     enabled, checker = load_egress_filter()
-    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled and profile == "polza", checker=checker))
+    return CommerceBridge(
+        Path(path), CatalogModel(key, model, enabled=enabled and profile == "polza", checker=checker),
+        verify_site=verify_site,
+    )
 
 
 def commerce_egress_configured() -> bool:
