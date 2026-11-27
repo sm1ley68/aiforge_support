@@ -28,7 +28,7 @@ from .indexed_chat import (
 from .offer_evidence import OfferCardEvidence
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
 from .routing import explicit_handoff_requested, requests_product_selection
-from .support_answers import SUPPORT_ANSWERS, support_request
+from .support_answers import CHECKOUT_QUESTION, SUPPORT_ANSWERS, checkout_help, support_request
 
 SPECIAL_CONDITION = re.compile(
     r"постоплат\w*|предоплат\w*|отсроч\w*|рассроч\w*|скид\w*|без\s+ндс|индивидуальн\w+\s+(?:цен\w*|услов\w*)",
@@ -270,6 +270,12 @@ class _Turn:
         faq = self.agent.knowledge.match_faq(self.text, self.now, customer_id=self.customer_id)
         if faq:
             return self.knowledge_answer(faq)
+        previous = self.history[-2] if len(self.history) > 1 else None
+        after_checkout_question = previous == Message("agent", CHECKOUT_QUESTION)
+        if checkout := checkout_help(self.text, after_question=after_checkout_question):
+            if after_checkout_question:
+                return self.handoff("support_follow_up", checkout)
+            return self.clarification(checkout)
         try:
             if (sku := direct_sku(self.text)) is not None:
                 patch = sku
@@ -293,7 +299,6 @@ class _Turn:
         except (DatabaseError, OSError):
             return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
         if patch is None or patch.action == "other":
-            previous = self.history[-2] if len(self.history) > 1 else None
             if previous == Message("agent", SELECTION_QUESTION):
                 return self.clarification(SELECTION_EXAMPLES)
             if previous == Message("agent", SELECTION_EXAMPLES):

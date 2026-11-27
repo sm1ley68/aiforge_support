@@ -32,6 +32,27 @@ RETURNS = Source(
 )
 SUPPORT_ANSWERS: dict[SupportTopic, Source] = {"keys": KEYS, "activation": ACTIVATION, "returns": RETURNS}
 
+CHECKOUT_QUESTION = (
+    "На каком шаге возникла проблема: при добавлении товара в корзину, оформлении заказа или оплате? "
+    "Если видите ошибку, напишите её текст без платёжных данных."
+)
+_CHECKOUT_STEP = re.compile(r"\b(?:корзин\w*|оформлен\w*|оформит\w*|оплат\w*|плат[её]ж\w*)\b")
+_CHECKOUT_PROBLEM = re.compile(
+    r"\b(?:проблем\w*|ошибк\w*|не (?:могу|получ\w*|уда[её]тся|удал[оа]сь|проход\w*|открыва\w*|добавля\w*))\b"
+)
+
+
+def checkout_help(text: str, *, after_question: bool) -> str | None:
+    query = normalize(text)
+    if not _CHECKOUT_STEP.search(query):
+        return None
+    if after_question:
+        return "Уточнить причину ошибки при оформлении или оплате покупки."
+    if _CHECKOUT_PROBLEM.search(query):
+        return CHECKOUT_QUESTION
+    return None
+
+
 _RETURN = re.compile(r"\b(?:возврат\w*|вернуть (?:деньги|оплат\w*|лицензи\w*|товар\w*|заказ\w*|покупк\w*))\b")
 _ACTIVATION = re.compile(r"\b(?:активаци\w*|активир\w*)\b")
 _KEYS = re.compile(r"\b(?:ключ(?:и|а|ей|ом)?|дистрибутив\w*|код(?:а)? активации|лицензионн\w* код\w*)\b")

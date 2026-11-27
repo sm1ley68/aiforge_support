@@ -101,6 +101,7 @@ _NEW_SELECTION = re.compile(
 )
 _BACKUP_REFINEMENT = re.compile(r"^(?:образ\w*|бессроч\w*|копи\w*|только|файл\w*|папк\w*|\d)", re.I)
 _NAMED_LOOKUP = re.compile(r"^(?:нуж(?:ен|на|ны|но)|интересует|ищу|хочу купить|найди)\s+(.{2,100})$", re.I)
+_BARE_NAMED_LOOKUP = re.compile(r"[\w-]+(?: [\w-]+){1,5}")
 _NAMED_SEATS = re.compile(
     rf"(?:\s+(?:на|для)\s+|[,;]\s*){_USER_COUNT.pattern}"
     rf"(?:[\s,;]+(?:{_CLEAR_EDITION.pattern}))?$",
@@ -297,21 +298,27 @@ def verified_named_input(index: SoftlineCatalog, text: str, context: CatalogCont
     if context is not None and context.mode == "named" and _NAMED_FOLLOW_UP.fullmatch(request):
         return CatalogInput("continue")
 
-    match = _NAMED_LOOKUP.fullmatch(request)
-    if match is None:
-        alias = _DEMO_NAMED.match(request)
-        if alias is None or alias.start(1) != 0:
-            return None
-    name = match[1] if match else request
-    if seats := _NAMED_SEATS.search(name):
-        name = name[:seats.start()].strip()
-    if _GENERIC_PURPOSE.fullmatch(name) or _requested_license(name):
-        return None
-    edition = _EDITION_SUFFIX.search(name)
-    title = name[:edition.start()] if edition else name
-    # Verify the product independently of a requested edition, which the feed may not confirm.
-    if index.has_title_phrase(title):
-        return CatalogInput("named", product=title, edition=edition[1] if edition else None)
+    names = []
+    if match := _NAMED_LOOKUP.fullmatch(request):
+        names.append(match[1])
+    elif _BARE_NAMED_LOOKUP.fullmatch(request) or (
+        (alias := _DEMO_NAMED.match(request)) and alias.start(1) == 0
+    ):
+        names.append(request)
+    clauses = re.split(r"[,;!?]+|\.(?=\s)", request)
+    if len(clauses) > 1:
+        names.extend(match[1] for clause in clauses if (match := _NAMED_LOOKUP.fullmatch(clause.strip())))
+
+    for name in dict.fromkeys(names):
+        if seats := _NAMED_SEATS.search(name):
+            name = name[:seats.start()].strip()
+        if _GENERIC_PURPOSE.fullmatch(name) or _requested_license(name):
+            continue
+        edition = _EDITION_SUFFIX.search(name)
+        title = name[:edition.start()] if edition else name
+        # Verify the product independently of a requested edition, which the feed may not confirm.
+        if index.has_title_phrase(title):
+            return CatalogInput("named", product=title, edition=edition[1] if edition else None)
     return None
 
 

@@ -77,6 +77,7 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
                           code="PCSCNL", term="бессрочная"),
                 offer_xml("473583", "Microsoft Project Professional 2024, электронная лицензия на 1 ПК, бессрочная",
                           "176639", code="EP2-07001", kind="Full", term=""),
+                offer_xml("45123", "Astra Linux Special Edition для рабочих станций", "15000"),
                 offer_xml("541420", "PDF Commander Бизнес (бессрочная лицензия), Количество рабочих мест", "4900",
                           term="бессрочная"),
                 offer_xml("541424", "PDF Commander Бизнес (подписка на 1 год), Количество рабочих мест", "2800",
@@ -382,6 +383,31 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([offer.offer_id for offer in answer.products], ["473583"])
         self.assertIn("за ПК", answer.text)
         self.assertFalse(answer.trace.calls)
+
+    async def test_bare_astra_title_is_verified_locally(self):
+        result = await self.chat.reply("astra", "1", "astra linux")
+        self.assertEqual(result.state.catalog_context.product, "astra linux")
+        self.assertIn(result.outcome, {"answer", "clarify"})
+        self.assertFalse(result.trace.calls)
+
+    async def test_product_name_in_purchase_clause_is_verified_locally(self):
+        result = await self.chat.reply("astra-sentence", "1", "Здравствуйте, нужна Astra Linux. Помогите с выбором")
+        self.assertEqual(result.state.catalog_context.product, "Astra Linux")
+        self.assertFalse(result.trace.calls)
+
+    async def test_checkout_problem_asks_for_step_and_hands_off_payment_issue(self):
+        result = await self.chat.reply(
+            "checkout", "1", "Здравствуйте, у меня возникла проблема с оформлением покупки Astra Linux. Помогите"
+        )
+        self.assertEqual(result.outcome, "clarify")
+        self.assertIn("На каком шаге", result.text)
+        self.assertIn("оплате", result.text)
+        self.assertFalse(result.trace.calls)
+
+        follow_up = await self.chat.reply("checkout", "2", "При оплате")
+        self.assertEqual(follow_up.handoff.reason, "support_follow_up")
+        self.assertIn("оплате", follow_up.handoff.question)
+        self.assertFalse(follow_up.trace.calls)
 
     async def test_backup_uses_verified_licenses_for_changes_in_scope_budget_and_count(self):
         first = await self.chat.reply("backup", "1", "Подберите решение для резервного копирования")
