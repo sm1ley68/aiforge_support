@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { createAgentClient } from '../agent-client.mjs';
-import { demoConversation, mockAgent } from '../mock-agent.mjs';
 import type { AgentResponse, Message, Scenario } from './agent-types';
 
-const endpoint = import.meta.env.VITE_AGENT_API_URL?.trim() ?? '';
+const endpoint = import.meta.env.VITE_AGENT_API_URL?.trim() || '/api/consultation';
 const catalogProductId = new URLSearchParams(window.location.search).get('product')?.trim();
 
-export const isDemo = !endpoint;
-
-const client = createAgentClient({ endpoint, mock: mockAgent });
+const client = createAgentClient({ endpoint });
 const empty: AgentResponse = {
   conversationId: null,
   messages: [],
@@ -20,18 +17,13 @@ const empty: AgentResponse = {
   suggestedReplies: [],
 };
 
-export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}) {
-  const [conversation, setConversation] = useState(() => {
-    const response = isDemo && seedDemo && !catalogProductId ? demoConversation : empty;
-    return { response, messages: response.messages };
-  });
+export function useConsultation() {
+  const [conversation, setConversation] = useState({ response: empty, messages: empty.messages });
   const { response, messages } = conversation;
-  const [scenario, setScenario] = useState<Scenario | null>(catalogProductId || response.conversationId ? 'known' : null);
-  const [productId, setProductId] = useState(catalogProductId || undefined);
+  const scenario: Scenario | null = catalogProductId ? 'known' : null;
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
-  const [session, setSession] = useState(0);
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
@@ -58,7 +50,7 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
         message,
         scenario,
         history: messages,
-        catalogProductId: productId,
+        catalogProductId: catalogProductId || undefined,
       }, { signal: controller.signal });
 
       if (controller.signal.aborted) return;
@@ -81,17 +73,5 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
     }
   }
 
-  function reset(nextScenario: Scenario | null = null) {
-    activeRequest.current?.abort();
-    activeRequest.current = null;
-    setConversation({ response: empty, messages: empty.messages });
-    setScenario(nextScenario);
-    setProductId(undefined);
-    setDraft('');
-    setPending(false);
-    setError('');
-    setSession(current => current + 1);
-  }
-
-  return { response, messages, scenario, draft, setDraft, pending, error, session, send, reset };
+  return { response, messages, draft, setDraft, pending, error, send };
 }

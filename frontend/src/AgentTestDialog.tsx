@@ -1,9 +1,9 @@
 import { AppIcon } from './AppIcon';
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { isDemo, useConsultation } from './use-consultation';
+import { useConsultation } from './use-consultation';
 
 export function AgentTestDialog({ onClose }: { onClose: () => void }) {
-  const { response, messages, draft, setDraft, pending, error, send } = useConsultation({ seedDemo: false });
+  const { response, messages, draft, setDraft, pending, error, send } = useConsultation();
   const dialog = useRef<HTMLDialogElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
 
@@ -28,7 +28,7 @@ export function AgentTestDialog({ onClose }: { onClose: () => void }) {
     >
       <div className="test-view">
         <header>
-          <div><h2 id="test-title">Тест агента</h2><p>{isDemo ? 'Демонстрационный агент' : 'Подключённый API агента'}</p></div>
+          <div><h2 id="test-title">Тест агента</h2></div>
           <button type="button" className="close-test" onClick={onClose} aria-label="Закрыть"><AppIcon name="close" size={20} /></button>
         </header>
         <div ref={transcript} className="test-transcript" role="log" aria-label="Тестовый диалог">

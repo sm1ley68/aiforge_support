@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useState } from 'react';
 import type { AgentResponse, Product } from './agent-types';
 import type { OperatorRequest } from './operator-types';
+import { formatCatalogDate } from './softline-api';
 
 const tabs = [
   { id: 'actions', label: 'Действия' },
@@ -50,7 +51,9 @@ function ProductResult({ product, index }: { product: Product; index: number }) 
           <button type="button" className="result-detail" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
             {expanded ? 'Свернуть' : 'Подробнее'}
           </button>
-          {expanded && <p className="result-extra">{product.detail}</p>}
+          {expanded && <p className="result-extra">{product.detail}
+            {product.snapshotAt && <> Снимок каталога от <time dateTime={product.snapshotAt}>{formatCatalogDate(product.snapshotAt)}</time>.</>}
+          </p>}
         </>
       )}
     </article>
