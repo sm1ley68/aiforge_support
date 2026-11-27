@@ -1,8 +1,12 @@
 export type Scenario = 'known' | 'discovery' | 'question';
 
 export type Message = {
-  role: 'user' | 'assistant';
+  id?: string;
+  clientMessageId?: string;
+  sentAt?: number;
+  role: 'user' | 'assistant' | 'support';
   content: string;
+  attachments?: { name: string; size: number; url: string }[];
 };
 
 export type Requirement = { label: string; value: string };

@@ -34,7 +34,7 @@ export function AgentTestDialog({ onClose }: { onClose: () => void }) {
         <div ref={transcript} className="test-transcript" role="log" aria-label="Тестовый диалог">
           {messages.length === 0 && <p className="test-prompt">Введите пример обращения клиента.</p>}
           {messages.map((message, index) => <p className={`test-message test-message--${message.role}`} key={index}>{message.content}</p>)}
-          {pending && <p className="test-prompt">В обработке…</p>}
+          {pending && <p className="test-prompt">Агент готовит ответ…</p>}
           {response.sources.length > 0 && (
             <ul className="test-sources">
               {response.sources.map(source => (

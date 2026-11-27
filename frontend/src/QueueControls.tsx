@@ -3,13 +3,29 @@ import type { OperatorRequest, OperatorStatus } from './operator-types';
 
 export type QueueFilter = { status?: OperatorStatus; issue?: string };
 
+export function reviewReason(request: OperatorRequest) {
+  return request.needsReply ? 'Клиент ответил' : request.issue?.label;
+}
+
+export function requestTimestamp(request: OperatorRequest) {
+  const time = Date.parse(request.updatedAt);
+  return Number.isFinite(time) ? time : Infinity;
+}
+
+export function requestsToReview(requests: OperatorRequest[]) {
+  return requests.filter(request => request.status === 'review').sort((first, second) => {
+    const priority = Number(Boolean(second.needsReply)) - Number(Boolean(first.needsReply));
+    return priority || requestTimestamp(first) - requestTimestamp(second);
+  });
+}
+
 export function filterRequests(requests: OperatorRequest[], filter: QueueFilter, query: string) {
   const needle = query.trim().toLocaleLowerCase('ru-RU');
 
   return requests.filter(request =>
     (!filter.status || request.status === filter.status) &&
-    (!filter.issue || request.issue?.label === filter.issue) &&
-    (!needle || [request.id, request.title, request.customer, request.issue?.label ?? '', request.issue?.detail ?? '',
+    (!filter.issue || reviewReason(request) === filter.issue) &&
+    (!needle || [request.id, request.title, request.customer, reviewReason(request) ?? '', request.issue?.label ?? '', request.issue?.detail ?? '',
       ...request.response.messages.map(message => message.content)]
       .some(value => value.toLocaleLowerCase('ru-RU').includes(needle))),
   ).sort((first, second) => Date.parse(second.updatedAt) - Date.parse(first.updatedAt));

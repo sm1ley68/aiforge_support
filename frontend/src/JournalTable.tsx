@@ -1,4 +1,5 @@
 import { AppIcon } from './AppIcon';
+import { reviewReason } from './QueueControls';
 import { RequestStatus, requestPreviewId } from './RequestPreview';
 import type { OperatorRequest } from './operator-types';
 
@@ -25,7 +26,7 @@ export function JournalTable({ requests, selectedId, onOpen }: {
         {requests.map(request => {
           const timestamp = Date.parse(request.updatedAt);
           const hasDate = Number.isFinite(timestamp);
-          const reason = request.status === 'review' ? request.issue?.label : undefined;
+          const reason = request.status === 'review' ? reviewReason(request) : undefined;
           const selected = request.id === selectedId;
           return (
             <tr key={request.id} role="row" data-current={selected || undefined}>
@@ -41,7 +42,7 @@ export function JournalTable({ requests, selectedId, onOpen }: {
                 <span>{request.customer}</span>
               </td>
               <td className="operator-reason" role="cell" data-empty={reason ? undefined : true}>{reason ?? '—'}</td>
-              <td className="operator-row-status" role="cell"><RequestStatus status={request.status} /></td>
+              <td className="operator-row-status" role="cell"><RequestStatus status={request.status} needsReply={request.needsReply} /></td>
               <td className="operator-time" role="cell">
                 {hasDate ? <time dateTime={request.updatedAt} title="Московское время">{clock.format(timestamp)}<small>{calendar.format(timestamp)}</small></time> : '—'}
                 <AppIcon name="chevron" className="operator-row-arrow" size={16} />

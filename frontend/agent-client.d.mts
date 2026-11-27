@@ -1,13 +1,6 @@
 import type { AgentRequest, AgentResponse } from './src/agent-types';
 
-export type ConsultationAttempt = {
-  messageId: string;
-  chat?: { chat_id: string; chat_token: string };
-  turnId?: string;
-};
-type Options = { signal?: AbortSignal; attempt?: ConsultationAttempt };
-
-export function newMessageId(): string;
+type Options = { signal?: AbortSignal };
 
 export function createAgentClient(config?: {
   endpoint?: string;

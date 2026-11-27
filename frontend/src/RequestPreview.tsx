@@ -8,8 +8,8 @@ import type { OperatorRequest } from './operator-types';
 
 export const requestPreviewId = 'journal-request-preview';
 
-export function RequestStatus({ status }: { status: OperatorRequest['status'] }) {
-  return <span className={`operator-status operator-status--${status}`}>{statuses.find(item => item.id === status)?.label}</span>;
+export function RequestStatus({ status, needsReply }: { status: OperatorRequest['status']; needsReply?: boolean }) {
+  return <span className={`operator-status operator-status--${status}`}>{needsReply ? 'Ответить' : statuses.find(item => item.id === status)?.label}</span>;
 }
 
 export function RequestPreview({ request, href, position, total, onPrevious, onNext, onClose }: {
@@ -25,7 +25,6 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
   const body = useRef<HTMLDivElement>(null);
   const isPresent = useIsPresent();
   const reduceMotion = useReducedMotion();
-  const sideBySide = window.matchMedia('(min-width: 1024px)').matches;
   const { id, title, customer, issue, response } = request;
   const answer = response.messages.findLast(message => message.role === 'assistant');
 
@@ -35,8 +34,22 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
 
   useLayoutEffect(() => {
     if (body.current) body.current.scrollTop = 0;
-    if (isPresent && !sideBySide) card.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [id, isPresent, sideBySide]);
+  }, [id]);
+
+  useLayoutEffect(() => {
+    if (!isPresent || window.matchMedia('(min-width: 1024px)').matches) return;
+    const frame = requestAnimationFrame(() => {
+      const element = card.current;
+      const desk = element?.closest('.operator-route');
+      if (!element || !desk) return;
+      const { top, bottom } = desk.getBoundingClientRect();
+      const headerTop = element.getBoundingClientRect().top;
+      if (headerTop < top || headerTop + 48 > bottom) {
+        element.scrollIntoView({ block: 'start', inline: 'nearest', behavior: reduceMotion ? 'instant' : 'smooth' });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isPresent, reduceMotion]);
 
   function closeOnEscape(event: KeyboardEvent<HTMLElement>) {
     if (event.key !== 'Escape') return;
@@ -52,9 +65,9 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
       aria-labelledby="request-preview-title"
       tabIndex={-1}
       inert={!isPresent}
-      initial={{ opacity: 0, x: reduceMotion || !sideBySide ? 0 : 22, y: reduceMotion || sideBySide ? 0 : -8 }}
-      animate={{ opacity: 1, x: 0, y: 0, transition: { duration: 0.27, ease: [0.2, 0.75, 0.25, 1], delay: reduceMotion ? 0 : 0.035 } }}
-      exit={{ opacity: 0, x: reduceMotion || !sideBySide ? 0 : 14, transition: { duration: 0.17, ease: 'easeIn' } }}
+      initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0, transition: { duration: reduceMotion ? 0 : .27, ease: [0.22, 0.75, 0.26, 1], delay: reduceMotion ? 0 : .026 } }}
+      exit={{ opacity: 0, y: reduceMotion ? 0 : -4, transition: { duration: reduceMotion ? 0 : .15, ease: 'easeOut' } }}
       onKeyDown={closeOnEscape}
     >
       <header className="preview-toolbar">
@@ -69,7 +82,7 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
       </header>
       <div className="request-preview-body" ref={body}>
         <div className="preview-heading">
-          <div><span className="preview-id">{id}</span><RequestStatus status={request.status} /></div>
+          <div><span className="preview-id">{id}</span><RequestStatus status={request.status} needsReply={request.needsReply} /></div>
           <h2 id="request-preview-title">{title}</h2>
           <p>{customer}</p>
         </div>
@@ -92,7 +105,7 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
         </section>
       </div>
       <footer className="preview-footer">
-        <a href={href}>Полная карточка <AppIcon name="chevron" size={16} /></a>
+        <a data-workspace-link data-opened-from-journal href={href}>Полная карточка <AppIcon name="chevron" size={16} /></a>
       </footer>
     </motion.aside>
   );

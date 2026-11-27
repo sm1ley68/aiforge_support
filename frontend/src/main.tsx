@@ -6,6 +6,7 @@ import './styles.css';
 import './navigation-preview.css';
 import './ascii-workspace.css';
 import './operator-workspace.css';
+import './queue-dashboard.css';
 
 const preview = import.meta.env.DEV && new URLSearchParams(window.location.search).get('nav-preview');
 const navigation = preview === 'integrated' || preview === 'compact' || preview === 'left' ? preview : undefined;

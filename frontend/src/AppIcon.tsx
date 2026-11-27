@@ -95,6 +95,9 @@ const glyphs = {
   back: <path d="M16 10H4m0 0 4.5-4.5M4 10l4.5 4.5" />,
   chevron: <path d="m8 5 5 5-5 5" />,
   close: <path d="m5.5 5.5 9 9m0-9-9 9" />,
+  attach: <path d="m8 11.5 4.7-4.7a1.7 1.7 0 0 1 2.4 2.4l-6 6.1a3 3 0 0 1-4.2-4.2l6.3-6.3a4.3 4.3 0 0 1 6.1 6.1l-6 6" />,
+  download: <path d="M10 3.5v8.2m-3.2-3.2 3.2 3.2 3.2-3.2M4 12v4h12v-4" />,
+  support: <path d="M4 10V9a6 6 0 0 1 12 0v1m-2 5v1.5H10m-6-6.5H3v4h3v-4Zm12 0h1v4h-3v-4Z" />,
   send: (
     <>
       <path fill="currentColor" stroke="none" opacity=".22" d="m10 3 6 6-3.8 1.4L10 16l-2.2-5.6L4 9l6-6Z" />

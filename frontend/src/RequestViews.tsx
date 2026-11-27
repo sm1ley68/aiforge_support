@@ -2,10 +2,13 @@ import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AppIcon } from './AppIcon';
 import { statuses } from './QueueAnalytics';
+import { RequestChat } from './RequestChat';
 import { RequestContext, RequestTabContent } from './RequestInspector';
 import type { InspectorTab } from './RequestInspector';
+import { RequestMessages } from './RequestMessages';
 import { RequestOverview } from './RequestOverview';
-import type { OperatorRequest } from './operator-types';
+import type { OperatorRequest, OperatorStatus } from './operator-types';
+import { useRequestChat } from './use-request-chat';
 
 const detailTabs = [
   { id: 'dialog', label: 'Диалог', icon: 'journal' },
@@ -32,7 +35,7 @@ export function RequestRow({ request, active, onClick }: { request: OperatorRequ
       <span className="request-main"><strong>{request.title}</strong><span>{request.customer}</span></span>
       <span className="request-meta">
         <time dateTime={request.updatedAt} title={formatTime(request.updatedAt, journalDate)}>{formatTime(request.updatedAt)}</time>
-        <span className={`request-status request-status--${request.status}`}>{status?.short}</span>
+        <span className={`request-status request-status--${request.status}`}>{request.needsReply ? 'Ответить' : status?.short}</span>
       </span>
     </button>
   );
@@ -45,30 +48,13 @@ function RequestHeading({ request, showStatus = false }: { request: OperatorRequ
   return (
     <header className="thread-heading">
       <div className="thread-scenario">
-        {showStatus && <b className={`request-status request-status--${request.status}`}>{status?.label}</b>}
+        {showStatus && <b className={`request-status request-status--${request.status}`}>{request.needsReply ? 'Ответить' : status?.label}</b>}
         {scenarioLabels[request.scenario]}
         <span>#{request.id}</span>
       </div>
       <Heading>{request.title}</Heading>
       <p>{request.customer} <span>·</span> <time dateTime={request.updatedAt}>{formatTime(request.updatedAt, journalDate)} МСК</time></p>
     </header>
-  );
-}
-
-function RequestMessages({ request }: { request: OperatorRequest }) {
-  return (
-    <div className="thread-messages" aria-label="Сообщения">
-      {request.response.messages.length ? (
-        request.response.messages.map((message, index) => (
-          <article className={`thread-message thread-message--${message.role}`} key={index}>
-            <span className="thread-message-icon" aria-hidden="true">
-              <AppIcon name={message.role === 'assistant' ? 'agent' : 'client'} size={16} />
-            </span>
-            <div><h3>{message.role === 'assistant' ? 'Агент Store' : 'Клиент'}</h3><p>{message.content}</p></div>
-          </article>
-        ))
-      ) : <p className="journal-empty">Сообщений в запросе пока нет.</p>}
-    </div>
   );
 }
 
@@ -86,7 +72,7 @@ export function RequestThread({ request, revealInspector }: { request?: Operator
             transition={{ duration: 0.26, ease }}
           >
             <RequestHeading request={request} />
-            <RequestMessages request={request} />
+            <RequestMessages messages={request.response.messages} />
             <div className="thread-footer">
               <button type="button" onClick={() => revealInspector('products')}><AppIcon name="products" size={15} /> Подбор <b>{request.response.products.length}</b></button>
               <button type="button" onClick={() => revealInspector('sources')}><AppIcon name="sources" size={15} /> Источники <b>{request.response.sources.length}</b></button>
@@ -102,10 +88,21 @@ export function RequestThread({ request, revealInspector }: { request?: Operator
   );
 }
 
-export function SelectedRequest({ request }: { request: OperatorRequest }) {
+export function SelectedRequest({ request, reviewQueue, requestHref, changeStatus }: {
+  request: OperatorRequest;
+  reviewQueue: OperatorRequest[];
+  requestHref: (id: string) => string;
+  changeStatus?: (status: OperatorStatus) => Promise<unknown>;
+}) {
   const [tab, setTab] = useState<DetailTab>('dialog');
+  const [startingOrder] = useState(() => reviewQueue.map(item => item.id));
   const tabGroup = useRef<HTMLDivElement>(null);
+  const chat = useRequestChat(request);
   const { response } = request;
+  const available = new Set(reviewQueue.map(item => item.id));
+  available.delete(request.id);
+  const nextId = startingOrder.slice(startingOrder.indexOf(request.id) + 1).find(id => available.has(id))
+    ?? reviewQueue.find(item => item.id !== request.id)?.id;
 
   function openProducts() {
     setTab('products');
@@ -125,10 +122,10 @@ export function SelectedRequest({ request }: { request: OperatorRequest }) {
         ))}
       </div>
       {tab === 'dialog' ? (
-        <div className="request-dialog-view">
+        <div className="request-dialog-view operator-detail-tab" key="dialog">
           <RequestOverview request={request} onProducts={openProducts} />
           <div className={`request-conversation${response.trace.length ? ' request-conversation--with-trace' : ''}`}>
-            <RequestMessages request={request} />
+            <RequestChat request={request} chat={chat} nextHref={nextId && requestHref(nextId)} changeStatus={changeStatus} />
             {response.trace.length > 0 && (
               <aside className="detail-context" aria-label="Ход работы агента">
                 <RequestContext response={response} showConditions={false} />
@@ -137,7 +134,7 @@ export function SelectedRequest({ request }: { request: OperatorRequest }) {
           </div>
         </div>
       ) : (
-        <div className="detail-tab-content">
+        <div className="detail-tab-content operator-detail-tab" key={tab}>
           <RequestTabContent key={tab} response={response} tab={tab} />
         </div>
       )}

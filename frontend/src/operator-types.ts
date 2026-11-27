@@ -13,12 +13,13 @@ export type RequestComparisonRow = {
 
 export type OperatorRequest = {
   id: string;
-  handoffId?: string;
   title: string;
   customer: string;
   updatedAt: string;
   scenario: Scenario;
   status: OperatorStatus;
+  needsReply?: boolean;
+  handledBy?: 'agent' | 'support';
   issue?: { label: string; detail: string; checks?: string[] };
   comparison?: { productId: string; rows: RequestComparisonRow[] };
   response: AgentResponse;
