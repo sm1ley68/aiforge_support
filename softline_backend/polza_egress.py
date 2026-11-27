@@ -20,11 +20,14 @@ from aisupport_ml.privacy import prepare_llm_input
 logger = logging.getLogger(__name__)
 FILTER_TIMEOUT_SECONDS = 1
 ENDPOINT = "https://polza.ai/api/v1/chat/completions"
-SYSTEM = (
-    "Извлеки параметры задачи из переданной технической фразы. "
-    "Возвращай только короткие значения из этой фразы. "
-    "Не извлекай названия продуктов, редакции, цены или свойства товаров."
-)
+SYSTEM = """Заполни все поля JSON по схеме. Вход — техническая фраза с фиксированными формулировками.
+Если фраза начинается с «Нужно резервное копирование» или «Нужно защитить почту и файлы»,
+поставь action="need", а в goal дословно скопируй «резервное копирование» или «защитить почту и файлы».
+В goal не включай количество, платформу, способ развёртывания или слово «Нужно».
+Если фраза начинается с «Технические условия», поставь action="continue" и goal=null.
+В file_os скопируй точное название и версию ОС из фразы, без предлогов и исправлений.
+В mail укажи Exchange только при явном «почтовая система Exchange». Если поля нет во фразе, верни null.
+Всегда возвращай null в полях fact, product и edition."""
 RESPONSE_FIELDS = {"action", "fact", "product", "edition", "goal", "mail", "file_os"}
 TASKS = {"backup": "резервное копирование", "email_file_security": "защитить почту и файлы"}
 PLATFORMS = {
@@ -110,7 +113,10 @@ def _screen_with_ml(scope: TurnScope) -> dict:
     stored = scope.stored_state or {}
     if any(value for key, value in stored.items() if key != "catalog_context"):
         return {"decision": "uncertain"}
-    if json.dumps(stored.get("catalog_context"), sort_keys=True) != json.dumps(scope.selection, sort_keys=True):
+    stored_selection = stored.get("catalog_context")
+    if isinstance(stored_selection, dict):
+        stored_selection = {"license_action": None, "unverified_constraint": False, **stored_selection}
+    if json.dumps(stored_selection, sort_keys=True) != json.dumps(scope.selection, sort_keys=True):
         return {"decision": "uncertain"}
 
     checked = prepare_llm_input(scope.message, history=scope.history, selection=scope.selection)
@@ -161,9 +167,9 @@ class PreparedPrompt:
 
     def validate_answer(self, result: dict) -> dict:
         if not isinstance(result, dict) or result.keys() != RESPONSE_FIELDS:
-            block("response_mismatch")
+            block("response_fields")
         if result["action"] not in ("need", "continue", "other"):
-            block("response_mismatch")
+            block("response_action")
         allowed = {
             "fact": None, "product": None, "edition": None,
             "goal": self.goal, "mail": self.mail, "file_os": self.platform,
@@ -173,9 +179,9 @@ class PreparedPrompt:
             if value is not None and (
                 not isinstance(value, str) or expected is None or value.casefold() != expected.casefold()
             ):
-                block("response_mismatch")
+                block(f"response_{key}")
         if result["action"] == "need" and result["goal"] is None:
-            block("response_mismatch")
+            block("response_goal_missing")
         return result
 
 

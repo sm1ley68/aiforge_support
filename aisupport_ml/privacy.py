@@ -6,13 +6,16 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import lru_cache
 from ipaddress import ip_address
+from itertools import chain
 import re
 import unicodedata
 
 
 _MAX_TEXT = 8_000
 _MAX_TOTAL = 24_000
-_MAX_HISTORY = 8
+_MAX_RECENT_HISTORY = 8
+_MAX_THREAD_MESSAGES = 512
+_MAX_THREAD_TEXT = 256_000
 
 # The value group excludes the label when it helps preserve the meaning of a message.
 _IDENTIFIERS = tuple((kind, re.compile(pattern, re.I)) for kind, pattern in (
@@ -302,22 +305,36 @@ def prepare_llm_input(
     """Check the local inputs and return an allowlisted outbound projection or a local-only result."""
     selection = selection if selection is not None else {}
     try:
-        if isinstance(history, str) or len(history) > _MAX_HISTORY or len(selection) > 50:
+        if isinstance(history, str) or len(history) > _MAX_THREAD_MESSAGES or len(selection) > 50:
             raise ValueError("Too much context")
-        texts = [message, *history, *_selection_text(selection)]
-        if any(not isinstance(text, str) or len(text) > _MAX_TEXT for text in texts):
+        incoming = [message, *_selection_text(selection)]
+        if any(not isinstance(text, str) or len(text) > _MAX_TEXT for text in (*incoming, *history)):
             raise ValueError("Invalid text")
-        if sum(map(len, texts)) > _MAX_TOTAL:
+        remaining = _MAX_TOTAL - sum(map(len, incoming))
+        if remaining < 0 or sum(map(len, history)) > _MAX_THREAD_TEXT:
             raise ValueError("Too much text")
+        recent_start = len(history)
+        for item in reversed(history[-_MAX_RECENT_HISTORY:]):
+            if len(item) > remaining:
+                break
+            remaining -= len(item)
+            recent_start -= 1
     except (TypeError, AttributeError, ValueError):
         return PrivacyResult("[СООБЩЕНИЕ_НЕ_ПРОВЕРЕНО]", ("unverified_input",))
 
-    checked = {text: mask_text(text, entity_detector=entity_detector) for text in dict.fromkeys(texts)}
+    checked = {text: mask_text(text, entity_detector=entity_detector)
+               for text in dict.fromkeys((*incoming, *history[recent_start:]))}
+    earlier = (mask_text(text, entity_detector=lambda _: ()) for text in dict.fromkeys(history[:recent_start])
+               if text not in checked)
     current = checked[message]
-    categories = {kind for item in checked.values() for kind in item.categories}
+    categories = set()
+    block_external = has_attachments
+    for item in chain(checked.values(), earlier):
+        categories.update(item.categories)
+        block_external |= item.block_external
     if has_attachments:
         categories.add("attachment")
-    if has_attachments or any(item.block_external for item in checked.values()):
+    if block_external:
         return PrivacyResult(current.text, tuple(sorted(categories)))
     # Free-text state values with findings cannot seed even the technical projection.
     safe_selection = {key: value for key, value in selection.items()

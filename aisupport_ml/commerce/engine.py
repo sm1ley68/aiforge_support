@@ -21,7 +21,8 @@ from .extraction import (
 )
 from .indexed_chat import (
     INDEXED_PROMPT_VERSION, INDEXED_SCHEMA, INDEXED_SYSTEM, CatalogInput, backup_input, context_fact, decide,
-    direct_sku, fallback_input, is_origin_follow_up, last_offer_sources, parse_catalog_input,
+    desktop_input, direct_sku, fallback_input, is_origin_follow_up, last_offer_sources, parse_catalog_input,
+    verified_named_input,
 )
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
 from .routing import explicit_handoff_requested
@@ -237,9 +238,9 @@ class _Turn:
                 sources = ()
             return self.handoff("manager_requested", "Уточнить условия и проверить выбранные позиции.", sources)
 
-        direct = self.agent.knowledge.direct(self.text, self.now, customer_id=self.customer_id)
-        if direct:
-            return self.knowledge_answer(direct)
+        faq = self.agent.knowledge.match_faq(self.text, self.now, customer_id=self.customer_id)
+        if faq:
+            return self.knowledge_answer(faq)
         try:
             sku = direct_sku(self.text)
             if sku is not None:
@@ -248,8 +249,12 @@ class _Turn:
                 patch = CatalogInput("fact", fact=fact)
             elif context is not None and is_origin_follow_up(self.text):
                 patch = CatalogInput("continue")
+            elif (desktop := desktop_input(self.text, context)) is not None:
+                patch = desktop
             elif (backup := backup_input(self.text, context)) is not None:
                 patch = backup
+            elif (named := await asyncio.to_thread(verified_named_input, index, self.text)) is not None:
+                patch = named
             else:
                 raw = await self.model_call("extract_catalog", INDEXED_SYSTEM, {
                     "message": self.text, "selection": asdict(context) if context else None,
@@ -259,6 +264,8 @@ class _Turn:
             patch = fallback_input(self.text, context)
             if patch is None:
                 return self.handoff("extraction_unavailable", "Проверить запрос клиента и продолжить подбор.")
+        except (DatabaseError, OSError):
+            return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
         try:
             decision = await asyncio.to_thread(decide, index, context, patch, self.text)
         except (DatabaseError, OSError):

@@ -125,6 +125,8 @@ class CatalogContext:
     shown_offers: tuple[str, ...] = ()
     backup_scope: Literal["files", "disk_image", "unverified"] | None = None
     perpetual_only: bool = False
+    license_action: Literal["new", "renew", "expired"] | None = None
+    unverified_constraint: bool = False
 
 
 @dataclass(frozen=True)
@@ -161,6 +163,8 @@ class Handoff:
 class KnowledgeUpdate:
     status: Literal["published", "existing", "draft"]
     id: str
+    source_id: str
+    source_version: str
 
 
 @dataclass(frozen=True)

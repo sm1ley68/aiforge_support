@@ -32,3 +32,10 @@ CREATE INDEX IF NOT EXISTS chat_turns_handoffs ON chat_turns (sequence DESC)
     WHERE status = 'succeeded' AND result ->> 'outcome' = 'handoff';
 
 ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
+CREATE TABLE IF NOT EXISTS commerce_knowledge (
+    article_id text PRIMARY KEY,
+    source_id text NOT NULL,
+    source_version text NOT NULL,
+    status text NOT NULL CHECK (status IN ('draft', 'published'))
+);

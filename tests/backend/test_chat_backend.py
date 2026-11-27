@@ -277,3 +277,23 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(case["requirements"]["nodes"], "50")
         self.assertEqual(case["requirements"]["budget_rub"], "650000")
         self.assertEqual(set(case["candidate_ids"]), {"5066", "5058"})
+
+    def test_public_knowledge_is_saved_with_turn_and_restored_in_new_worker(self):
+        from softline_backend.commerce_bridge import commerce_from_env
+
+        with patch.dict(os.environ, COMMERCE_CATALOG_INDEX_PATH="/unused", POLZA_API_KEY="", LLM_API_KEY=""):
+            self.submit("keys", "А где найти ключ активации после покупки?")
+            first = commerce_from_env()
+            self.assertTrue(process_one(self.store, commerce=first))
+            publications = self.store.published_knowledge()
+            self.assertEqual([source for _, source, _ in publications], ["softline-lk-keys"])
+
+            restarted = commerce_from_env()
+            restarted.restore_knowledge(publications)
+            second_id = self.submit("keys-again", "Где скачать ключ активации?").json()["turn_id"]
+            self.assertTrue(process_one(self.store, commerce=restarted))
+            response = self.client.get(f"{self.path}/turns/{second_id}", headers=self.headers).json()
+            self.assertEqual(response["outcome"], "answer")
+            self.assertIn("Частый вопрос", response["text"])
+            self.assertNotIn("knowledge_update", response)
+            self.assertEqual(self.store.published_knowledge(), publications)

@@ -1,8 +1,94 @@
 """Manually checked capability and licensing evidence for Softline recommendations."""
 
+import re
 from dataclasses import dataclass, replace
 
+from .catalog import CatalogOffer
 from .contracts import Source
+
+
+MDAEMON_LICENSING = Source(
+    "mdaemon-email-server-licensing", "2026-11-27", "MDaemon — варианты покупки Email Server",
+    "Производитель предлагает выбор типа операции, срока и числа пользователей.",
+    "https://mdaemon.com/products/mdaemon-email-server",
+)
+
+
+@dataclass(frozen=True)
+class VerifiedSeatOffer:
+    reference: str
+    title: str
+    platforms: tuple[str, ...]
+    max_devices: int | None
+    term_months: int | None
+    russian_verified: bool
+    source: Source
+
+
+@dataclass(frozen=True)
+class DesktopTask:
+    name: str
+    pattern: re.Pattern[str]
+    offers: tuple[VerifiedSeatOffer, ...]
+
+
+DESKTOP_TASKS = (
+    DesktopTask(
+        "планирование проектов",
+        re.compile(
+            r"\b(?:управлени\w*\s+(?:проект\w*|задач\w*)|планировани\w*\s+проект\w*"
+            r"|планировать\s+проект\w*|вести\s+проект\w*)\b",
+            re.I,
+        ),
+        (
+            VerifiedSeatOffer(
+                "EP2-07001", "Microsoft Project Professional 2024", ("windows 10", "windows 11"),
+                None, None, False,
+                Source(
+                    "ms-project-2024", "2026-11-26", "Microsoft — возможности и требования Project Professional 2024",
+                    "Поддерживает планирование задач, зависимости и временные шкалы. "
+                    "Редакция работает на Windows 10 и 11. Бессрочная лицензия рассчитана на один ПК.",
+                    "https://www.microsoft.com/en-us/microsoft-365/p/project-professional-2024/cfq7ttc0ph40",
+                ),
+            ),
+        ),
+    ),
+    DesktopTask(
+        "редактирование PDF",
+        re.compile(r"\b(?:редактировани\w*\s+pdf|редактировать\s+pdf|pdf[ -]+редактор\w*|редактор\w*\s+pdf)\b", re.I),
+        (
+            VerifiedSeatOffer(
+                "541420", "PDF Commander Бизнес", ("windows 10", "windows 11"), 3, None, True,
+                Source(
+                    "pdf-commander-editing", "2026-11-26", "PDF Commander — редактирование текста PDF",
+                    "Прямое редактирование текста PDF доступно в версии для Windows. "
+                    "Для бессрочной бизнес-лицензии Windows цена за рабочее место меняется от четырёх копий.",
+                    "https://pdf-editor.su/compare-master-pdf-editor.php",
+                ),
+            ),
+            VerifiedSeatOffer(
+                "541424", "PDF Commander Бизнес", ("windows 10", "windows 11"), 3, 12, True,
+                Source(
+                    "pdf-commander-subscription", "2026-11-26", "PDF Commander — годовая бизнес-лицензия",
+                    "Годовая подписка для организаций лицензируется по рабочим местам. "
+                    "Прямое редактирование текста PDF доступно в версии для Windows.",
+                    "https://pdf-editor.su/compare-master-pdf-editor.php",
+                ),
+            ),
+        ),
+    ),
+)
+
+
+def desktop_task(text: str) -> DesktopTask | None:
+    matches = [task for task in DESKTOP_TASKS if task.pattern.search(text) or task.name.casefold() == text.casefold()]
+    return matches[0] if len(matches) == 1 else None
+
+
+def desktop_evidence(offer: CatalogOffer) -> VerifiedSeatOffer | None:
+    return next((record for task in DESKTOP_TASKS for record in task.offers
+                 if record.reference in (offer.offer_id, offer.vendor_code)
+                 and record.title.casefold() in offer.title.casefold()), None)
 
 
 @dataclass(frozen=True)
@@ -14,6 +100,8 @@ class VerifiedPackage:
 
 
 PACKAGES = (
+    VerifiedPackage("KL4869RAPFS", 25, 49, 12),
+    VerifiedPackage("KL4869RAPDS", 25, 49, 24),
     VerifiedPackage("KL4869RAQFS", 50, 99, 12),
     VerifiedPackage("KL4869RAQDS", 50, 99, 24),
 )
@@ -77,7 +165,8 @@ PACKAGE_SOURCES = (
     Source(
         "softline-kts-components", "2026-11-26", "Softline — Kaspersky Total Security для бизнеса",
         "В базовую лицензию входят компоненты защиты Microsoft Exchange и Kaspersky Endpoint Security для Windows. "
-        "Диапазон от 50 до 99 узлов указан для артикулов KL4869RAQFS на 12 месяцев и KL4869RAQDS на 24 месяца.",
+        "Для 25–49 узлов подходят KL4869RAPFS и KL4869RAPDS, для 50–99 — KL4869RAQFS и KL4869RAQDS. "
+        "Суффиксы FS и DS соответствуют срокам 12 и 24 месяца для этих артикулов.",
         "https://store.softline.ru/kaspersky/kaspersky-total-security-dlya-biznesa/",
     ),
     Source(
@@ -114,6 +203,57 @@ CATALOG_KNOWLEDGE = (
             "Как я получу электронную лицензию?",
             "Куда отправляют электронную лицензию?",
             "Где посмотреть срок доставки электронной лицензии?",
+        ),
+        reusable=True,
+    ),
+    Source(
+        "softline-store-payment", "2026-11-26", "Способы оплаты в Softline Store",
+        "Компания или ИП может оплатить заказ банковским переводом. "
+        "В магазине также доступна оплата картой. Для физлиц есть СБП, цифровой рубль и SberPay.",
+        "https://store.softline.ru/delivery_info/",
+        aliases=(
+            "Как оплатить заказ", "Какие способы оплаты есть", "Чем можно оплатить покупку",
+            "Можно оплатить картой", "Можно оплатить по безналу", "Можно оплатить банковским переводом",
+            "Как юрлицу оплатить заказ",
+        ),
+        reusable=True,
+    ),
+    Source(
+        "softline-lk-invoices", "2026-11-26", "Счёт на оплату в личном кабинете Softline",
+        "Войдите в личный кабинет «Софтлайн Цифровой Актив» и откройте раздел «Счета и платежи». "
+        "Найдите заказ, например по номеру, и скачайте документ для оплаты. "
+        "Список доступных заказов зависит от вашей учётной записи и её прав.",
+        "https://docs.softline.com/ru-ru/lk/invoices",
+        aliases=(
+            "Где скачать счет", "Как скачать счет на оплату", "Где счет за заказ",
+            "Где найти счет в личном кабинете", "Не вижу счет в личном кабинете",
+            "Можно скачать счет из личного кабинета", "Как получить счет по существующему заказу",
+        ),
+        reusable=True,
+    ),
+    Source(
+        "softline-lk-keys", "2026-11-26", "Ключи активации и дистрибутивы",
+        "Для уже купленного продукта войдите в личный кабинет «Софтлайн Цифровой Актив» "
+        "и откройте «Дистрибутивы и ключи». Для поиска по заказу откройте его в разделе "
+        "«Счета и платежи» и перейдите на страницу нужного продукта.",
+        "https://docs.softline.com/ru-ru/lk/fulfillment",
+        aliases=(
+            "Где скачать ключ активации", "Где ключи от купленных лицензий", "Где мои ключи",
+            "Где найти ключ активации после покупки", "Где скачивать дистрибутив",
+            "Как скачать дистрибутив", "Где найти ключи и дистрибутивы",
+        ),
+        reusable=True,
+    ),
+    Source(
+        "softline-lk-closing-documents", "2026-11-26", "Закрывающие документы по заказу",
+        "Для заказа, самостоятельно оформленного в Store, найдите его в разделе «Счета и платежи» "
+        "личного кабинета и скачайте закрывающие документы из карточки заказа. "
+        "Если заказ оформлял менеджер, документы предоставляет он.",
+        "https://docs.softline.com/ru-ru/lk/closing-documents",
+        aliases=(
+            "Где скачать закрывающие документы", "Как получить закрывающие документы для бухгалтерии",
+            "Где взять закрывающие документы", "Где скачать УПД",
+            "Как скачать УПД по заказу", "Где найти акт по заказу",
         ),
         reusable=True,
     ),

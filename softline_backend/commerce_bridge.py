@@ -16,7 +16,7 @@ from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
 from aisupport_ml.commerce.contracts import CatalogContext, Message, State
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.retrieval import KnowledgeBase
-from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
+from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE, desktop_evidence
 from aisupport_ml.contracts import IntentModel, TemporaryReadError
 from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
@@ -140,7 +140,9 @@ def _card(offer: CatalogOffer, *, node_price: bool) -> ProductCard | None:
     facts = [VerifiedFact(field=field, value=str(value), source=source)
              for field, value in attributes.items() if value is not None]
     summary = "Данные из снимка каталога"
-    if node_price and "по количеству узлов" in offer.title.casefold():
+    if desktop_evidence(offer) is not None:
+        summary = "Цена указана за ПК"
+    elif node_price and "по количеству узлов" in offer.title.casefold():
         summary = "Цена указана за узел"
     return ProductCard(
         offer_id=offer.offer_id, sku=offer.vendor_code, title=offer.title, url=url,
@@ -165,6 +167,9 @@ class CommerceBridge:
         self.agent = CommerceAgent(
             model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=6
         )
+
+    def restore_knowledge(self, publications: list[tuple[str, str, str]]) -> None:
+        self.agent.knowledge.restore_publications(publications, datetime.now(timezone.utc))
 
     def reply(
         self, turn: ClaimedTurn, history: list[MessageView], persisted_state: dict | None
@@ -222,7 +227,7 @@ class CommerceBridge:
             )
         return TurnResult(
             outcome=result.outcome, text=result.text, products=products, sources=sources,
-            commerce_state=saved_state,
+            commerce_state=saved_state, knowledge_update=result.knowledge_update,
         )
 
 

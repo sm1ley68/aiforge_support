@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, JsonValue, StringConstraints, field_validator, model_validator
 
+from aisupport_ml.commerce.contracts import KnowledgeUpdate
+
 
 class NewChat(BaseModel):
     chat_id: UUID
@@ -80,6 +82,7 @@ class TurnResult(BaseModel):
     handoff: HandoffDetails | None = None
     catalog_selection: CatalogReference | None = None
     commerce_state: dict[str, JsonValue] | None = None
+    knowledge_update: KnowledgeUpdate | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
     def check_handoff(self):

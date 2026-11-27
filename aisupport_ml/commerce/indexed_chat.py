@@ -10,7 +10,10 @@ from .catalog import CatalogOffer, SoftlineCatalog
 from .contracts import CatalogContext, Source
 from .extraction import OPTIONAL_TEXT, _literal, object_schema
 from .retrieval import normalize
-from .softline_evidence import BACKUP_LICENSES, BACKUP_SOURCES, PACKAGES, PACKAGE_SOURCES, RUSSIAN_SOURCE
+from .softline_evidence import (
+    BACKUP_LICENSES, BACKUP_SOURCES, DesktopTask, MDAEMON_LICENSING, PACKAGES, PACKAGE_SOURCES,
+    RUSSIAN_SOURCE, desktop_evidence, desktop_task,
+)
 
 
 INDEXED_PROMPT_VERSION = "softline-catalog-v2"
@@ -40,7 +43,7 @@ INDEXED_SCHEMA = object_schema({
 })
 _EDITION_SUFFIX = re.compile(r"\s+(standard|professional|enterprise|стандартный|профессиональный|расширенный)$", re.I)
 _EDITION_START = re.compile(r"\s+(standard|professional|enterprise|стандартный|профессиональный|расширенный)\b", re.I)
-_CLEAR_EDITION = re.compile(r"без привязки к редакции|(?:любая|любую) редакци\w*|редакция не важна", re.I)
+_CLEAR_EDITION = re.compile(r"без привязки к редакции|без фильтра по редакции|(?:любая|любую) редакци\w*|редакция не важна", re.I)
 _USER_COUNT = re.compile(r"\b([1-9]\d{0,4})\s*(?:пользовател\w*|сотрудник\w*|человек\w*|рабочи\w* мест\w*)\b", re.I)
 _NODE_COUNT = re.compile(r"\b([1-9]\d{0,4})\s*(?:узл\w*|устройств\w*)\b", re.I)
 _TERM = re.compile(r"\b([1-9]\d?)\s*(мес\w*|год\w*|лет)\b", re.I)
@@ -57,10 +60,11 @@ _CLOUD = re.compile(r"\b(?:в облаке|облако|облачн\w*|cloud|sa
 _CLOUD_EXCLUDED = re.compile(r"без облака|не в облаке|облако нельзя", re.I)
 _LOCAL_EXCLUDED = re.compile(r"не локально|локально нельзя", re.I)
 _EXACT_SKU = re.compile(r"^(?:(?:sku|артикул|код)\s*[:№]?\s*|(?:сколько стоит|есть ли в наличии)\s+)?([\w-]{2,40})[?.!]?$", re.I)
-_DEMO_NAMED = re.compile(r"^(?:(?:нужен|интересует|сколько стоит|есть ли в наличии)\s+)?"
+_DEMO_NAMED = re.compile(r"^(?:(?:нужен|интересует|сколько стоит|есть ли в наличии|(?:хочу\s+)?продлить|возобновить)\s+)?"
                          r"(mdaemon(?:\s+messaging\s+server)?)(?=$|[\s,.?!])", re.I)
 _WINDOWS_PRODUCT = re.compile(r"^(?:(?:нужен|интересует|ищу)\s+)?(Windows Server(?:\s+\d{4})?)[?.!]*$", re.I)
 _DEMO_GOAL = re.compile(r"^(?:не знаю[^.;?!]*, но\s+)?(?:хотим|надо|нужно)\s+(защитить почту и файлы)\b", re.I)
+_SECURITY_NEED = re.compile(r"(?<!не )\b(?:потребуется|необходимо)\s+(защитить почту и файлы)\b", re.I)
 _EXCHANGE = re.compile(r"\b(?:Microsoft\s+)?Exchange(?:\s+(?:Online|Server(?:\s+\d{4})?))?\b", re.I)
 _FILE_SERVER = re.compile(r"\b(?:Windows(?:\s+(?:Server(?:\s+\d{4})?|\d{1,2}))?|Linux|macOS)\b", re.I)
 _BACKUP_GOAL = re.compile(
@@ -89,6 +93,17 @@ _NEW_SELECTION = re.compile(
     re.I,
 )
 _BACKUP_REFINEMENT = re.compile(r"^(?:образ\w*|бессроч\w*|копи\w*|только|файл\w*|папк\w*|\d)", re.I)
+_NAMED_LOOKUP = re.compile(r"^(?:нуж(?:ен|на|ны|но)|интересует|ищу|хочу купить|найди)\s+(.{2,100})$", re.I)
+_LICENSE_REQUESTS = (
+    ("expired", re.compile(r"\b(?:просроч\w*|ист[её]к(?:ла|ли|ло)?|возобнов\w*)\b", re.I)),
+    ("renew", re.compile(r"\b(?:продл\w*|действующ\w+\s+(?:лицензи\w*|подписк\w*))\b", re.I)),
+    ("new", re.compile(r"\b(?:нов\w+\s+лицензи\w*|первая покупка|покупаем впервые)\b", re.I)),
+)
+_DESKTOP_UNVERIFIED = re.compile(
+    r"\b(?:интегра\w*|ocr|распознава\w*|цифров\w*\s+подпис\w*|vdi|rdp|терминальн\w*|"
+    r"совместн\w*\s+(?:работ\w*|редактир\w*)|1c|1с|jira|битрикс\w*)\b", re.I,
+)
+_MD_ALIAS = re.compile(r"^mdaemon$", re.I)
 _TARGET_PREFIX = re.compile(r"\b(?:для|под|на базе|на платформе|в среде|совместим\w* с)\s*$", re.I)
 _PURPOSE = re.compile(r"\b(?:нуж(?:ен|на|но|ны)|ищ(?:у|ем)|хотим|подбер(?:и|ите))\s+([^,.?!]+?)\s*$", re.I)
 _GENERIC_PURPOSE = re.compile(r"^(?:антивирус|решение|программ\w*|систем\w*|защит\w*)(?:\s+\w+){0,3}$", re.I)
@@ -96,6 +111,10 @@ _BARE_FACTS = (
     ("price", re.compile(r"(?:сколько (?:это )?стоит|какая цена|цена|сколько будет стоить)")),
     ("availability", re.compile(r"(?:есть(?: ли)? в наличии|в наличии|какое наличие)")),
     ("term", re.compile(r"(?:какой срок лицензии|на какой срок|на сколько месяцев|срок лицензии)")),
+)
+_COMPATIBILITY = re.compile(
+    r"(?:совместим[ао]?(?: ли)? с|(?:подойдет|работает)(?: ли)? (?:для|на|под)|"
+    r"поддерживает(?: ли)?) (?P<platform>.+)"
 )
 
 
@@ -153,6 +172,8 @@ def _validate_product_role(patch: CatalogInput, text: str) -> CatalogInput:
 def context_fact(text: str) -> str | None:
     question = re.sub(r"^(?:а|и|подскажите)\s+", "", normalize(text))
     question = re.sub(r"^(?:у (?:неё|нее|него|этой)|он|она)\s+", "", question)
+    if (compatibility := _COMPATIBILITY.fullmatch(question)) and _FILE_SERVER.fullmatch(compatibility["platform"]):
+        return "compatibility"
     return next((fact for fact, pattern in _BARE_FACTS if pattern.fullmatch(question)), None)
 
 
@@ -165,6 +186,23 @@ def direct_sku(text: str) -> str | None:
 
 def is_origin_follow_up(text: str) -> bool:
     return bool(_ORIGIN_FOLLOW_UP.fullmatch(text))
+
+
+def desktop_input(text: str, context: CatalogContext | None) -> CatalogInput | None:
+    task = desktop_task(text)
+    if task is not None:
+        return CatalogInput("need", goal=task.name)
+    if context is None or context.mode != "need" or not desktop_task(context.goal or ""):
+        return None
+    new_request = _NEW_SELECTION.match(text)
+    if new_request and not _DESKTOP_UNVERIFIED.match(text[new_request.end():]):
+        return None
+    if any(pattern.search(text) for pattern in (
+        _BACKUP_COUNT, _USER_COUNT, _FILE_SERVER, _LOCAL, _CLOUD, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN,
+        _TERM, _PERPETUAL, _DESKTOP_UNVERIFIED,
+    )) or _months(text) is not None:
+        return CatalogInput("continue")
+    return None
 
 
 def backup_input(text: str, context: CatalogContext | None) -> CatalogInput | None:
@@ -193,7 +231,7 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
     windows = _WINDOWS_PRODUCT.fullmatch(text)
     if windows:
         return CatalogInput("named", product=windows[1])
-    goal = _DEMO_GOAL.match(text)
+    goal = _DEMO_GOAL.match(text) or _SECURITY_NEED.search(text)
     if goal:
         return CatalogInput("need", goal=goal[1])
     platform = _FILE_SERVER.search(text)
@@ -203,13 +241,26 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
             return scoped
     if context is None:
         return None
-    if context.mode == "named" and (_USER_COUNT.search(text) or _CLEAR_EDITION.search(text) or _TERM.search(text)):
+    if context.mode == "named" and (
+        _USER_COUNT.search(text) or _CLEAR_EDITION.search(text) or _months(text) or _requested_license(text)
+    ):
         return CatalogInput("continue")
     if context.mode == "need":
         mail, server = _EXCHANGE.search(text), _FILE_SERVER.search(text)
         if mail or server or any(pattern.search(text) for pattern in (_NODE_COUNT, _LOCAL, _CLOUD, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN)):
             return CatalogInput("continue", mail=mail[0] if mail else None, file_os=server[0] if server else None)
     return None
+
+
+def verified_named_input(index: SoftlineCatalog, text: str) -> CatalogInput | None:
+    match = _NAMED_LOOKUP.fullmatch(text.strip(" ?!."))
+    if match is None:
+        return None
+    name = match[1].strip()
+    if _GENERIC_PURPOSE.fullmatch(name) or _requested_license(name):
+        return None
+    # A product name must match the index as a complete phrase.
+    return CatalogInput("named", product=name) if index.has_title_phrase(name) else None
 
 
 def _keep_selection(previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogInput:
@@ -247,6 +298,10 @@ def _target_os(text: str, hint: str | None) -> str | None:
         matches[:0] = re.finditer(re.escape(hint), text, re.I)
     return next((match[0] for match in matches
                  if _TARGET_PREFIX.search(text[:match.start()]) or normalize(text) == normalize(match[0])), None)
+
+
+def _requested_license(text: str) -> str | None:
+    return next((kind for kind, pattern in _LICENSE_REQUESTS if pattern.search(text)), None)
 
 
 def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogContext | None:
@@ -310,7 +365,17 @@ def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> 
         mail=mail[0] if mail else patch.mail or context.mail,
         file_os=file_os or context.file_os,
         goal=patch.goal or context.goal, deployment=deployment, russian_only=russian_only,
+        license_action=(_requested_license(text) or context.license_action) if context.mode == "named" else None,
     )
+    if updated.mode == "need" and desktop_task(updated.goal or ""):
+        explicit_platforms = {normalize(match[0]) for match in _FILE_SERVER.finditer(text)}
+        perpetual = bool(_PERPETUAL.search(text)) or (updated.perpetual_only and term is None)
+        return replace(
+            updated, nodes=_count(_BACKUP_COUNT, text, context.nodes),
+            file_os=None if len(explicit_platforms) > 1 else updated.file_os,
+            perpetual_only=perpetual, term_months=None if perpetual else updated.term_months,
+            unverified_constraint=updated.unverified_constraint or bool(_DESKTOP_UNVERIFIED.search(text)),
+        )
     if updated.mode != "need" or not _BACKUP_GOAL.search(updated.goal or ""):
         return updated
     scope = updated.backup_scope
@@ -357,11 +422,21 @@ def _line(item: CatalogOffer, *, nodes: int | None = None) -> str:
     price = f"{item.price:.2f} {item.currency}" if item.price is not None and item.currency else "цена не указана"
     if nodes is not None and item.price is not None:
         price = f"{price} за узел, {item.price * nodes:.2f} {item.currency} за {nodes} узлов"
+    elif item.price is not None and desktop_evidence(item):
+        price += " за ПК"
     elif item.price is not None and "по количеству" in item.title.casefold():
         price += " за единицу лицензирования"
     status = {True: "доступно по фиду", False: "недоступно по фиду", None: "наличие не указано"}[item.available]
     details = [item.license_type, item.term, f"до {item.user_limit} пользователей" if item.user_limit else None]
     return f"{item.title} ({item.offer_id}) — " + "; ".join((*filter(None, details), price, status)) + "."
+
+
+def _offer_license(item: CatalogOffer) -> str | None:
+    if kind := _requested_license(f"{item.title} {item.license_type or ''}"):
+        return kind
+    if normalize(item.license_type or "") in {"полная версия", "full"}:
+        return "new"
+    return None
 
 
 def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
@@ -370,17 +445,27 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
     if context.russian_only:
         return CatalogDecision("clarify", "Для подбора российского аналога уточните, какую задачу должен решать продукт.", context)
     exact = index.by_reference(context.product)
-    offers = exact or index.find_titles(context.product, users=context.users, limit=40)
+    name = "MDaemon Messaging Server" if _MD_ALIAS.fullmatch(context.product) else context.product
+    offers = exact or index.find_titles(name, users=context.users, limit=40)
     offers = tuple(item for item in offers if _valid_offer(item))
     if context.edition:
         offers = tuple(item for item in offers if item.edition and normalize(item.edition) == normalize(context.edition))
         if not offers:
+            if normalize(name) == "mdaemon messaging server" and normalize(context.edition) in {"standard", "стандартный"}:
+                return CatalogDecision(
+                    "clarify", "Редакция MDaemon «Standard» не подтверждается карточками текущего фида. "
+                    "Пришлите артикул этой редакции или напишите «Покажите без фильтра по редакции», "
+                    "чтобы сравнить доступные лицензии MDaemon Messaging Server.",
+                    context, sources=(MDAEMON_LICENSING,),
+                )
             return CatalogDecision("clarify", f"По фиду Softline редакция «{context.edition}» не подтверждена. "
-                                   "Уточните редакцию или пришлите артикул.", context)
+                                   "Уточните редакцию, пришлите артикул или попросите показать варианты без фильтра по редакции.", context)
     if context.users:
         offers = tuple(item for item in offers if item.user_limit is not None and item.user_limit >= context.users)
     if context.term_months:
         offers = tuple(item for item in offers if item.term and _months(item.term) == context.term_months)
+    if context.license_action:
+        offers = tuple(item for item in offers if _offer_license(item) == context.license_action)
     if context.file_os:
         os_name = normalize(context.file_os)
         offers = tuple(item for item in offers if os_name in {normalize(item.operating_system or ""), normalize(item.platform or "")})
@@ -395,12 +480,70 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
                                "Уточните редакцию, срок или артикул.", context)
     if not exact and len(offers) > 1 and context.users is None:
         return CatalogDecision("clarify", "Для сравнения лицензий уточните число пользователей и, если важен, срок.", context)
-    options = offers[:5]
+    if context.users is not None and not exact:
+        available = tuple(item for item in offers if item.available is True) or offers
+        smallest = min(item.user_limit for item in available)
+        options = tuple(item for item in available if item.user_limit == smallest)[:5]
+    else:
+        options = offers[:5]
     note = ("Позиция" if len(options) == 1 else "Варианты лицензий") + f" по фиду от {options[0].snapshot_at}:\n"
     if len(options) > 1:
         note += "Проверьте, нужна новая лицензия или продление.\n"
     return CatalogDecision("answer", note + "\n".join(_line(item) for item in options),
                            replace(context, shown_offers=tuple(item.offer_id for item in options)), options, _sources(options))
+
+
+def _recommend_desktop(index: SoftlineCatalog, context: CatalogContext, task: DesktopTask) -> CatalogDecision:
+    if context.unverified_constraint:
+        return CatalogDecision("clarify", "Для дополнительного условия требуется отдельная проверка. "
+                               "Могу передать подбор менеджеру.", context)
+    platform = normalize(context.file_os or "")
+    if context.deployment == "cloud":
+        return CatalogDecision("clarify", "По этой задаче подтверждены только устанавливаемые варианты. "
+                               "Подойдёт установка на рабочие компьютеры?", context)
+    if not platform or platform == "windows":
+        return CatalogDecision("clarify", "Какая версия ОС установлена на рабочих компьютерах?", context)
+    if context.nodes is None:
+        return CatalogDecision("clarify", "На сколько компьютеров нужно установить программу?", context)
+
+    candidates = []
+    for evidence in task.offers:
+        if (platform not in evidence.platforms
+                or evidence.max_devices is not None and context.nodes > evidence.max_devices
+                or context.russian_only and not evidence.russian_verified
+                or context.term_months is not None and evidence.term_months != context.term_months
+                or context.perpetual_only and evidence.term_months is not None):
+            continue
+        matches = index.by_reference(evidence.reference)
+        if len(matches) != 1:
+            continue
+        item, = matches
+        if (not _valid_offer(item) or normalize(evidence.title) not in normalize(item.title)
+                or item.available is not True or item.currency != "RUB" or item.price is None or item.price <= 0):
+            continue
+        if evidence.term_months is None:
+            if normalize(item.license_type or "") not in {"полная версия", "full"}:
+                continue
+            if not _PERPETUAL.search(item.term or item.title):
+                continue
+        elif _months(item.term or "") != evidence.term_months:
+            continue
+        total = item.price * context.nodes
+        if context.budget_rub is None or total <= context.budget_rub:
+            candidates.append((total, item, evidence.source))
+
+    if not candidates:
+        return CatalogDecision("clarify", "В проверенных предложениях нет варианта с этими условиями. "
+                               "Могу передать подбор менеджеру.", context)
+    options = sorted(candidates, key=lambda entry: (entry[0], entry[1].offer_id))[:3]
+    products = tuple(item for _, item, _ in options)
+    lines = [f"{item.title} ({item.offer_id}) — {item.price:.2f} RUB за ПК, "
+             f"{total:.2f} RUB за {context.nodes} ПК." for total, item, _ in options]
+    intro = (f"Подбор для задачи «{task.name}» на {context.file_os}. "
+             f"Цена и доступность по фиду от {products[0].snapshot_at}.")
+    sources = (*_sources(products), *(source for _, _, source in options))
+    return CatalogDecision("recommend", "\n".join((intro, *lines)),
+                           replace(context, shown_offers=tuple(item.offer_id for item in products)), products, sources)
 
 
 def _recommend_backup(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
@@ -465,6 +608,8 @@ def _recommend(index: SoftlineCatalog, context: CatalogContext, text: str) -> Ca
     goal = normalize(context.goal or "")
     if not goal:
         return CatalogDecision("clarify", "Какую задачу нужно решить и для скольких сотрудников?", context)
+    if task := desktop_task(goal):
+        return _recommend_desktop(index, context, task)
     if _BACKUP_GOAL.search(goal):
         return _recommend_backup(index, context)
     if not (re.search(r"защит|безопасност|антивирус", goal) and "почт" in goal and "файл" in goal):
@@ -546,11 +691,14 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
     else:
         context = CatalogContext("named", product=item.offer_id, shown_offers=(item.offer_id,))
     sources = _sources(options)
+    evidence = desktop_evidence(item)
     if patch.fact == "price":
         value = f"{item.price:.2f} {item.currency}" if item.price is not None and item.currency else None
         if value:
             title = item.title.casefold()
-            if "по количеству узлов" in title:
+            if evidence is not None:
+                value += " за ПК"
+            elif "по количеству узлов" in title:
                 value += " за узел"
             elif "по количеству" in title:
                 value += " за единицу лицензирования"
@@ -558,8 +706,21 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
     elif patch.fact == "availability":
         value = {True: "доступно", False: "недоступно", None: None}[item.available]
         label = "Наличие"
+    elif patch.fact == "compatibility":
+        platform = _FILE_SERVER.search(text)
+        assert platform is not None
+        if evidence is None or normalize(platform[0]) not in evidence.platforms:
+            return CatalogDecision("clarify", f"Для «{item.title}» совместимость с {platform[0]} "
+                                   "по проверенным материалам не подтверждена.", context, sources=sources)
+        return CatalogDecision(
+            "answer", f"Для «{item.title}» подтверждена поддержка {platform[0]}.",
+            context, options, (*sources, evidence.source),
+        )
     else:
         value = item.term
+        if value is None and evidence is not None and evidence.term_months is None:
+            return CatalogDecision("answer", f"{item.title} · бессрочная лицензия по данным производителя.",
+                                   context, options, (*sources, evidence.source))
         label = "Срок лицензии"
     if value is None:
         return CatalogDecision("clarify", f"В фиде нет данных по параметру «{label.lower()}» для «{item.title}». "

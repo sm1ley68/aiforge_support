@@ -1,5 +1,5 @@
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from difflib import SequenceMatcher
@@ -11,12 +11,21 @@ from .contracts import KnowledgeUpdate, Source
 from ..search import terms
 
 
+_FAQ_FILLERS = {
+    "а", "вы", "где", "же", "здравствуйте", "как", "мне", "можно", "пожалуйста", "подскажите", "привет", "скажите",
+}
+
+
 def normalize(text: str) -> str:
     return " ".join(terms(text))
 
 
 def _context(source: Source) -> str:
     return " ".join((source.title, source.sku or "", *source.aliases, source.text))
+
+
+def _article_id(source: Source) -> str:
+    return "faq-" + sha256(f"{source.id}:{source.version}".encode()).hexdigest()[:16]
 
 
 class KnowledgeBase:
@@ -56,34 +65,65 @@ class KnowledgeBase:
             return expand_exceptions((eligible[source_id] for source_id in matches), eligible, limit=5)
         return ()
 
+    def match_faq(self, query: str, now: datetime, sku: str | None = None, customer_id: str | None = None):
+        """Return a single reviewed FAQ when its wording matches unambiguously."""
+        if direct := self.direct(query, now, sku, customer_id):
+            return direct
+        words = set(terms(query)) - _FAQ_FILLERS
+        if len(words) < 2:
+            return ()
+        eligible = self.eligible(now, sku, customer_id)
+        ranked: dict[str, float] = {}
+        for source in self.original.values():
+            if source.id not in eligible or not source.reusable:
+                continue
+            for alias in source.aliases:
+                alias_words = set(terms(alias)) - _FAQ_FILLERS
+                overlap = words & alias_words
+                if len(overlap) < 2 or words - alias_words:
+                    continue
+                score = 2 * len(overlap) / (len(words) + len(alias_words))
+                if score >= 0.8:
+                    match = self.prefer_article(source, eligible)
+                    ranked[match.id] = max(score, ranked.get(match.id, 0.0))
+        matches = sorted(ranked, key=ranked.__getitem__, reverse=True)
+        if not matches or (len(matches) > 1 and ranked[matches[0]] - ranked[matches[1]] < 0.15):
+            return ()
+        return expand_exceptions((eligible[matches[0]],), eligible, limit=5)
+
     def prefer_article(self, source, eligible):
         for article, parent in self.generated.values():
             if parent == source and article.id in eligible:
                 return article
         return source
 
+    def restore_publications(self, publications: Iterable[tuple[str, str, str]], now: datetime) -> None:
+        for article_id, source_id, version in publications:
+            source = self.original.get(source_id)
+            if source is not None and source.version == version and _article_id(source) == article_id:
+                self.learn(source, now)
+
     def learn(self, source: Source, now: datetime, *, multi_source=False) -> KnowledgeUpdate:
         canonical = self.original.get(source.id)
         if canonical is None:
             generated = self.generated.get(source.id)
             if generated:
-                return KnowledgeUpdate("existing", source.id)
-        article_id = "faq-" + sha256(
-            f"{source.id}:{source.version}".encode()
-        ).hexdigest()[:16]
+                _, parent = generated
+                return KnowledgeUpdate("existing", source.id, parent.id, parent.version)
+        article_id = _article_id(source)
         if article_id in self.generated:
-            return KnowledgeUpdate("existing", article_id)
+            return KnowledgeUpdate("existing", article_id, source.id, source.version)
         # Reusable is a trusted property set when importing approved public material.
         # New FAQs copy verified facts verbatim and never use dialogue text.
         has_contact = re.search(r"[\w.+-]+@[\w.-]+\.[a-zа-я]{2,}|(?:\+?\d[ ()-]*){10,}", f"{source.title} {source.text} {source.aliases}", re.I)
         if (multi_source or canonical != source or not source.active(now) or not source.reusable
                 or source.customer_id or source.exceptions or has_contact or not source.text.strip()):
             self.drafts[article_id] = source.id
-            return KnowledgeUpdate("draft", article_id)
+            return KnowledgeUpdate("draft", article_id, source.id, source.version)
         article = replace(source, id=article_id, title=f"Частый вопрос: {source.title}", reusable=False)
         self.generated[article_id] = article, source
         self.drafts.pop(article_id, None)
-        return KnowledgeUpdate("published", article_id)
+        return KnowledgeUpdate("published", article_id, source.id, source.version)
 
 
 def lexical(query: str, sources: Sequence[Source]) -> list[Source]:

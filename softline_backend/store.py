@@ -83,6 +83,7 @@ class ChatStore:
                     "SELECT chats.token_hash, chat_turns.retry_attempt_base, chat_turns.updated_at "
                     "FROM chats JOIN chat_turns USING (chat_id) LIMIT 0"
                 )
+                db.execute("SELECT article_id, source_id, source_version, status FROM commerce_knowledge LIMIT 0")
         except Error:
             return False
         return True
@@ -234,6 +235,12 @@ class ChatStore:
             ).fetchone()
         return row["state"] if row is not None else None
 
+    def published_knowledge(self) -> list[tuple[str, str, str]]:
+        with self._connect() as db:
+            return [(row["article_id"], row["source_id"], row["source_version"]) for row in db.execute(
+                "SELECT article_id, source_id, source_version FROM commerce_knowledge WHERE status = 'published'"
+            )]
+
     @staticmethod
     def _history(db, chat_id: UUID, before: int | None = None) -> list[MessageView]:
         query = "SELECT turn_id, message_text, result FROM chat_turns WHERE chat_id = %s"
@@ -325,4 +332,17 @@ class ChatStore:
                     turn.attempts,
                 ),
             )
-            return cursor.rowcount == 1
+            if cursor.rowcount != 1:
+                return False
+            if result is not None and (update := result.knowledge_update) is not None:
+                db.execute(
+                    """INSERT INTO commerce_knowledge (article_id, source_id, source_version, status)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (article_id) DO UPDATE SET status = 'published'
+                       WHERE commerce_knowledge.status = 'draft' AND excluded.status = 'published'
+                         AND commerce_knowledge.source_id = excluded.source_id
+                         AND commerce_knowledge.source_version = excluded.source_version""",
+                    (update.id, update.source_id, update.source_version,
+                     "draft" if update.status == "draft" else "published"),
+                )
+            return True

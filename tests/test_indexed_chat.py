@@ -48,9 +48,17 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
             feed = folder / "feed.xml"
             index = folder / "catalog.sqlite"
             sample = [
+                offer_xml("19578", "MDaemon Messaging Server, 40 пользователей", "94341", count="40"),
                 offer_xml("19579", "MDaemon Messaging Server, 50 пользователей", "101171", count="50"),
+                offer_xml("19580", "MDaemon Messaging Server, 60 пользователей", "108001", count="60"),
                 offer_xml("19590", "MDaemon Messaging Server продление", "50585", kind="Продление", count="50"),
-                offer_xml("19601", "MDaemon Messaging Server продление другой лицензии", "80937", kind="Продление", count="50"),
+                offer_xml("19601", "MDaemon Messaging Server продление просроченной подписки", "80937",
+                          kind="Продление", count="50"),
+                offer_xml("359849", "MDaemon Connector for Outlook", "888", count="50"),
+                offer_xml("5065", "Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов", "7735.50",
+                          code="KL4869RAPFS"),
+                offer_xml("5057", "Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов", "11601",
+                          code="KL4869RAPDS", term="24 мес."),
                 offer_xml("5066", "Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов", "7691.40",
                           code="KL4869RAQFS"),
                 offer_xml("5058", "Kaspersky Total Security для бизнеса базовая лицензия по количеству узлов", "11536.20",
@@ -60,6 +68,12 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
                 offer_xml("339674", "Handy Backup Professional", "4930", code="HBP4-9", term=""),
                 offer_xml("421471", "Кибер Бэкап Стандартная для рабочей станции Windows", "9066",
                           code="PCSCNL", term="бессрочная"),
+                offer_xml("473583", "Microsoft Project Professional 2024, электронная лицензия на 1 ПК, бессрочная",
+                          "176639", code="EP2-07001", kind="Full", term=""),
+                offer_xml("541420", "PDF Commander Бизнес (бессрочная лицензия), Количество рабочих мест", "4900",
+                          term="бессрочная"),
+                offer_xml("541424", "PDF Commander Бизнес (подписка на 1 год), Количество рабочих мест", "2800",
+                          kind="Подписка"),
             ]
             feed.write_text(f'<yml_catalog date="2026-11-25 14:12"><shop><offers>{"".join(sample)}</offers></shop></yml_catalog>',
                             encoding="utf-8")
@@ -68,6 +82,19 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.model = ExtractionStub()
         self.chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase([]), catalog_index=self.index))
 
+    async def test_smallest_sufficient_seat_package_keeps_license_types_distinct(self):
+        self.model.expect("named", product="MDaemon")
+        compared = await self.chat.reply("seats", "1", "Нужен MDaemon на 49 пользователей")
+        self.assertEqual({offer.offer_id for offer in compared.products}, {"19579", "19590", "19601"})
+        self.assertTrue(all(offer.user_limit == 50 for offer in compared.products))
+
+        self.model.expect("continue")
+        new = await self.chat.reply("seats", "2", "Нужна новая лицензия")
+        self.assertEqual([offer.offer_id for offer in new.products], ["19579"])
+        self.model.expect("continue")
+        expired = await self.chat.reply("seats", "3", "Продлить просроченную подписку")
+        self.assertEqual([offer.offer_id for offer in expired.products], ["19601"])
+
     async def test_unknown_edition_then_mdaemon_comparison_and_exact_sku(self):
         self.model.expect("named", product="MDaemon")
         unknown = await self.chat.reply("md", "1", "Нужен MDaemon Standard на 50 пользователей")
@@ -75,6 +102,7 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("«Standard»", unknown.text)
         self.assertFalse(unknown.products)
         self.assertEqual(unknown.state.catalog_context.users, 50)
+        self.assertEqual(unknown.sources[0].url, "https://mdaemon.com/products/mdaemon-email-server")
 
         self.model.expect("named", product="MDaemon Messaging Server")
         matched = await self.chat.reply("md", "2", "MDaemon Messaging Server на 50 пользователей, без привязки к редакции")
@@ -137,6 +165,13 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(handed, repeated)
         self.assertEqual(len(self.chat.manager_queue), 1)
 
+    async def test_security_recommendation_respects_node_price_tier(self):
+        self.model.expect("need", goal="защитить почту и файлы")
+        request = "Нужно защитить почту и файлы, Exchange, Windows Server, локально, 40 устройств, бюджет до 350 тысяч рублей"
+        result = await self.chat.reply("security", "1", request)
+        self.assertEqual([offer.vendor_code for offer in result.products], ["KL4869RAPFS"])
+        self.assertIn("309420.00 RUB за 40 узлов", result.text)
+
     async def test_demo_flows_keep_working_during_provider_outage(self):
         class UnavailableModel:
             async def complete(self, system, text, schema):
@@ -147,6 +182,10 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unknown.outcome, "clarify")
         self.assertIn("«Standard»", unknown.text)
         self.assertEqual(unknown.trace.calls[0].error, "TemporaryReadError")
+        relaxed = await chat.reply("md", "unfiltered", "Покажите без фильтра по редакции")
+        self.assertEqual(relaxed.outcome, "answer")
+        self.assertEqual(relaxed.state.catalog_context.users, 50)
+        self.assertIsNone(relaxed.state.catalog_context.edition)
         offers = await chat.reply("md", "2", "MDaemon Messaging Server на 50 пользователей, без привязки к редакции")
         self.assertEqual(offers.outcome, "answer")
         self.assertTrue({"19579", "19590", "19601"} <= {item.offer_id for item in offers.products})
@@ -234,6 +273,59 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Microsoft Exchange", product.text)
         self.assertTrue(product.sources[0].url.startswith("https://store.softline.ru/kaspersky/"))
         self.assertFalse(product.trace.calls)
+
+    async def test_softline_help_matches_rephrased_questions_and_leaves_other_requests_open(self):
+        agent = CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=self.index)
+        for message, path in (
+            ("А где же скачать счёт на оплату?", "/invoices"),
+            ("Подскажите, где найти ключ активации после покупки?", "/fulfillment"),
+            ("Можно скачать УПД по заказу?", "/closing-documents"),
+            ("Оплатить картой можно?", "/delivery_info/"),
+        ):
+            with self.subTest(message=message):
+                result = await agent.reply("kb", message, message)
+                self.assertEqual(result.outcome, "answer")
+                self.assertTrue(result.sources[0].url.endswith(path))
+                self.assertFalse(result.trace.calls)
+        self.model.expect("other")
+        unrelated = await agent.reply("kb", "custom", "Где скачать счёт и как автоматизировать выдачу ключей через API?")
+        self.assertNotEqual(unrelated.outcome, "answer")
+        self.assertFalse(unrelated.sources)
+
+    async def test_desktop_recommendations_check_amount_platform_term_and_vendor_evidence(self):
+        requirements = await self.chat.reply("projects", "1", "Нужно управление задачами для 20 пользователей")
+        self.assertEqual(requirements.outcome, "clarify")
+        self.assertIn("версия ОС", requirements.text)
+        selected = await self.chat.reply("projects", "2", "Windows 11, 20 компьютеров, бюджет до 4 000 000 рублей")
+        self.assertEqual([offer.offer_id for offer in selected.products], ["473583"])
+        self.assertIn("3532780.00 RUB за 20 ПК", selected.text)
+        self.assertTrue(any(source.id == "ms-project-2024" for source in selected.sources))
+        self.assertFalse(selected.trace.calls)
+        compatible = await self.chat.reply("projects", "3", "Подойдёт ли для Windows 10?")
+        self.assertIn("подтверждена поддержка Windows 10", compatible.text)
+        self.assertEqual(compatible.sources[-1].id, "ms-project-2024")
+        term = await self.chat.reply("projects", "4", "Какой срок лицензии?")
+        self.assertIn("бессрочная", term.text)
+        self.assertFalse(term.trace.calls)
+
+        pdf = await self.chat.reply("pdf", "1", "Нужен российский PDF-редактор на 3 ПК с Windows 11")
+        self.assertEqual([offer.offer_id for offer in pdf.products], ["541424", "541420"])
+        perpetual = await self.chat.reply("pdf", "2", "Только бессрочная")
+        self.assertEqual([offer.offer_id for offer in perpetual.products], ["541420"])
+        unsupported = await self.chat.reply("pdf", "3", "Нужна интеграция с 1С")
+        self.assertEqual(unsupported.outcome, "clarify")
+        self.assertFalse(unsupported.products)
+        another_refinement = await self.chat.reply("pdf", "4", "Бюджет до 100 тысяч рублей")
+        self.assertFalse(another_refinement.products)
+        tier_unverified = await self.chat.reply("pdf-tier", "1", "PDF-редактор для 4 ПК на Windows 11")
+        self.assertEqual(tier_unverified.outcome, "clarify")
+        self.assertFalse(tier_unverified.products)
+
+    async def test_catalog_verified_named_lookup_does_not_require_provider(self):
+        answer = await self.chat.reply("exact-name", "1", "Нужен Microsoft Project Professional 2024")
+        self.assertEqual([offer.offer_id for offer in answer.products], ["473583"])
+        self.assertIn("за ПК", answer.text)
+        self.assertFalse(answer.trace.calls)
 
     async def test_backup_uses_verified_licenses_for_changes_in_scope_budget_and_count(self):
         first = await self.chat.reply("backup", "1", "Подберите решение для резервного копирования")

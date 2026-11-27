@@ -2,18 +2,21 @@ import asyncio
 import json
 import os
 import unittest
+from dataclasses import asdict
 from importlib.util import find_spec
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch
 
 import httpx
 
+from aisupport_ml.commerce.contracts import CatalogContext
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.contracts import TemporaryReadError
 from softline_backend.commerce_bridge import CatalogModel, CommerceBridge
 from softline_backend.contracts import MessageView
-from softline_backend.polza_egress import TurnScope, load_egress_filter, polza_scope
+from softline_backend.polza_egress import TurnScope, _screen_with_ml, load_egress_filter, polza_scope
 from softline_backend.store import ClaimedTurn
 from softline_backend.worker import reply_from_env
 
@@ -182,8 +185,36 @@ class EgressTests(unittest.IsolatedAsyncioTestCase):
                 await self.complete(native_filter, candidate={"message": personal, "selection": None})
             self.assertEqual(len(self.requests), 1)
 
+    @unittest.skipUnless(find_spec("natasha") is not None, "requires the local privacy extra")
+    async def test_long_history_egress_only_sends_approved_fields(self):
+        history = tuple(f"Техническое уточнение {index}" for index in range(16))
+        with (
+            patch.dict(os.environ, LLM_BASE_URL="https://polza.ai/api/v1", POLZA_EGRESS_MODE="real"),
+            patch("softline_backend.polza_egress.FILTER_TIMEOUT_SECONDS", 10),
+        ):
+            _, native_filter = load_egress_filter()
+            self.scope = TurnScope("test-turn", MESSAGE, history, None)
+            await self.complete(native_filter)
+            self.assertEqual(self.requests[0]["messages"][1]["content"],
+                             "Нужно резервное копирование для 10 ПК с Windows 11, локально")
+
+            self.scope = TurnScope("test-turn", MESSAGE, ("В переписке есть диагноз", *history), None)
+            with self.assertRaises(TemporaryReadError):
+                await self.complete(native_filter)
+            self.assertEqual(len(self.requests), 1)
 
 class EgressBridgeTests(unittest.TestCase):
+    def test_old_catalog_context_is_screened_with_current_default_fields(self):
+        current = asdict(CatalogContext("need", goal="резервное копирование"))
+        old = {key: value for key, value in current.items() if key not in {"license_action", "unverified_constraint"}}
+        scope = TurnScope("old-turn", MESSAGE, (), {"catalog_context": old}, current)
+        with patch("softline_backend.polza_egress.prepare_llm_input",
+                   return_value=SimpleNamespace(categories=(), model_payload=TECHNICAL["fields"])) as checked:
+            self.assertEqual(_screen_with_ml(scope)["decision"], "allow")
+            checked.assert_called_once_with(MESSAGE, history=(), selection=current)
+            current["goal"] = "другая задача"
+            self.assertEqual(_screen_with_ml(scope)["decision"], "uncertain")
+
     def test_worker_guard_handoff_retains_original_only_in_local_case(self):
         outgoing = []
         sensitive = "Уточните требования, номер заказа TEST-4217"

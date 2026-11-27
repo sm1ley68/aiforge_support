@@ -90,8 +90,12 @@ def main():
     store = ChatStore(os.environ["DATABASE_URL"])
     reply = reply_from_env()
     commerce = commerce_from_env()
+    knowledge_loaded = False
     while True:
         try:
+            if commerce is not None and not knowledge_loaded:
+                commerce.restore_knowledge(store.published_knowledge())
+                knowledge_loaded = True
             if not process_one(store, reply, commerce=commerce):
                 sleep(0.5)
         except OperationalError:

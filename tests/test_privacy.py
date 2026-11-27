@@ -108,7 +108,7 @@ class PrivacyTests(unittest.TestCase):
             raise RuntimeError("internal example error")
 
         for options in ({"history": "not a list"}, {"selection": {"unknown": {"text": "nested"}}},
-                        {"entity_detector": failed_detector}, {"history": ["brief"] * 9}):
+                        {"entity_detector": failed_detector}, {"history": ["brief"] * 513}):
             with self.subTest(options=tuple(options)):
                 result = prepare_llm_input("10 ПК с Windows 11", **options)
                 self.assertIsNone(result.model_payload)
@@ -116,6 +116,24 @@ class PrivacyTests(unittest.TestCase):
         self.assertIn("[ПОЧТА]", result.masked_message)
         self.assertIn("entity_detector_unavailable", result.categories)
         self.assertNotIn("internal example error", repr(result))
+
+    def test_old_history_is_screened_without_consuming_the_recent_window(self):
+        history = [f"Техническое уточнение {index}" for index in range(24)]
+        scanned = []
+
+        def detect(text):
+            scanned.append(text)
+            return ()
+
+        result = prepare_llm_input("10 ПК с Windows 11", history=history, entity_detector=detect)
+        self.assertEqual(result.model_payload, {"platform": "windows_11", "device_count": 10})
+        self.assertEqual(scanned, ["10 ПК с Windows 11", *history[-8:]])
+        personal = prepare_llm_input("10 ПК с Windows 11", history=["Контакт demo@example.invalid", *history],
+                                     entity_detector=no_entities)
+        self.assertIn("email", personal.categories)
+        sensitive = prepare_llm_input("10 ПК с Windows 11", history=["У меня диабет", *history],
+                                      entity_detector=no_entities)
+        self.assertIsNone(sensitive.model_payload)
 
     def test_unverified_catalog_reference_and_conflicts_block_calls(self):
         self.assertIsNone(prepare_llm_input("Сколько стоит артикул 12345?", entity_detector=no_entities).model_payload)

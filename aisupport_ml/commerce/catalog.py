@@ -196,7 +196,7 @@ class SoftlineCatalog:
             return db.execute("SELECT 1 FROM offers_fts WHERE offers_fts MATCH ? LIMIT 1", (query,)).fetchone() is not None
 
     def find_titles(self, title: str, *, users: int | None = None, limit: int = 12) -> tuple[CatalogOffer, ...]:
-        """Search a literal product-name phrase, optionally for an exact seat count."""
+        """Search a literal product-name phrase, preferring the smallest available package that fits."""
         if not 1 <= limit <= 100:
             raise ValueError("limit must be between 1 and 100")
         terms = re.findall(r"[^\W_]+", title.casefold())
@@ -205,9 +205,10 @@ class SoftlineCatalog:
         query = 'title : "' + " ".join(terms) + '"'
         return self._select(
             "JOIN offers_fts ON offers_fts.rowid = offers.rowid WHERE offers_fts MATCH ? "
-            "AND (? IS NULL OR user_limit = ?) "
-            "ORDER BY (available IS NOT 1), bm25(offers_fts), offer_id LIMIT ?",
-            (query, users, users, limit),
+            "AND (? IS NULL OR user_limit >= ?) "
+            "ORDER BY (available IS NOT 1), CASE WHEN ? IS NOT NULL THEN user_limit END, "
+            "bm25(offers_fts), offer_id LIMIT ?",
+            (query, users, users, users, limit),
         )
 
     def search(self, query: str, *, available_only: bool = False, limit: int = 12) -> tuple[CatalogOffer, ...]:
