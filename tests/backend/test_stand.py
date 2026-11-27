@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
 
+from aisupport_ml.commerce.catalog import build_catalog
 from softline_backend.api import create_app
 from softline_backend.catalog import build_index
 from softline_backend.contracts import TurnResult
@@ -37,6 +38,32 @@ class StandSurfaceTests(unittest.TestCase):
             self.assertEqual(ready.json()["database"], "unavailable")
             self.assertEqual(ready.json()["catalog"], "unconfigured")
             self.assertEqual(ready.json()["provider"], "deterministic")
+
+    def test_public_product_card_reads_the_exact_offer_from_the_commerce_snapshot(self):
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "feed.xml"
+            index = Path(folder) / "catalog.sqlite3"
+            feed.write_text(
+                '<yml_catalog date="2026-11-26 12:00"><shop><offers>'
+                '<offer id="473583" available="true"><name>Microsoft Project Professional 2024</name>'
+                '<vendorCode>EP2-07001</vendorCode><price>176639</price><currencyId>RUR</currencyId>'
+                '<url>https://store.softline.ru/test/473583/</url></offer></offers></shop></yml_catalog>',
+                encoding="utf-8",
+            )
+            build_catalog(feed, index)
+            with TestClient(create_app(ChatStore("unused"), commerce_index=index)) as client:
+                result = client.get("/api/catalog/offers/473583")
+                self.assertEqual(result.status_code, 200)
+                card = result.json()
+                self.assertEqual(
+                    (card["offer_id"], card["sku"], card["title"], card["price_amount"], card["availability"]),
+                    ("473583", "EP2-07001", "Microsoft Project Professional 2024", "176639", True),
+                )
+                self.assertTrue(card["snapshot_at"].endswith("+03:00"))
+                self.assertEqual(client.get("/api/catalog/offers/12345").status_code, 404)
+                self.assertEqual(client.get("/api/catalog/offers/EP2-07001").status_code, 422)
+            with TestClient(create_app(ChatStore("unused"), commerce_index=index.with_name("missing.sqlite3"))) as client:
+                self.assertEqual(client.get("/api/catalog/offers/473583").status_code, 503)
 
 
 @unittest.skipUnless(os.environ.get("TEST_DATABASE_URL"), "requires PostgreSQL")

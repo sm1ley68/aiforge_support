@@ -4,9 +4,9 @@ import type { ChatMessage, ChatSession, HandoffState, Turn } from './softline-ap
 
 type Pending = { id: string; text: string; manager?: boolean; turnId?: string };
 type SavedChat = { session?: ChatSession; pending?: Pending };
-const storageKey = 'softline.live-chat.v1';
+const baseStorageKey = 'softline.live-chat.v1';
 
-function restore(): SavedChat {
+function restore(storageKey: string): SavedChat {
   try {
     const stored = JSON.parse(sessionStorage.getItem(storageKey) || '{}');
     return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
@@ -15,8 +15,9 @@ function restore(): SavedChat {
   }
 }
 
-export function useLiveConversation() {
-  const [saved, setSaved] = useState(restore);
+export function useLiveConversation(offerId?: string) {
+  const storageKey = offerId ? `${baseStorageKey}.${offerId}` : baseStorageKey;
+  const [saved, setSaved] = useState(() => restore(storageKey));
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [results, setResults] = useState<Record<string, Turn>>({});
   const [handoff, setHandoff] = useState<HandoffState>();
@@ -127,6 +128,7 @@ export function useLiveConversation() {
   useEffect(() => {
     const interrupted = latest.current.pending;
     if (interrupted && !interrupted.turnId) void deliver(interrupted);
+    else if (!latest.current.session && offerId) send(`ID предложения ${offerId}`);
     return () => inFlight.current?.abort();
   }, []);
 
@@ -210,6 +212,7 @@ export function useLiveConversation() {
     setLoading(false);
     setSessionUnavailable(false);
     setAttempt(value => value + 1);
+    if (offerId) send(`ID предложения ${offerId}`);
   }
 
   const pendingFailed = Boolean(pending?.turnId && results[pending.turnId]?.status === 'failed');

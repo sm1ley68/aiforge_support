@@ -32,3 +32,15 @@
 .store-send-retry button { text-decoration: underline; font-weight: 670; min-height: 30px; }
 @media (max-width: 360px) { .store-contact-form { grid-template-columns: minmax(0, 1fr); } }
 .store-knowledge-label { display: flex; align-items: center; gap: 5px; margin-top: 8px; color: var(--chat-accent); font-size: 12px; font-weight: 680; }
+
+
+.store-offer-context {
+  flex: none;
+  padding: 7px var(--chat-gutter);
+  background: #fff;
+  border-bottom: 1px solid var(--chat-rule);
+  color: var(--chat-accent);
+  font-size: 13px;
+  font-weight: 650;
+}
+.store-offer-context a { color: inherit; text-underline-offset: 3px; }

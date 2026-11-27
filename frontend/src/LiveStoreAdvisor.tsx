@@ -5,7 +5,7 @@ import { DemoNotice } from './DemoNotice';
 import type { IconName } from './AppIcon';
 import { StoreRibbon } from './StoreRibbon';
 import { ApiError, api, chatPath, chatRequest, formatCatalogDate, formatPrice, json, safeLink, turnPath } from './softline-api';
-import type { Availability, ChatSession, HandoffState, Quote, QuoteCustomer, Turn } from './softline-api';
+import type { Availability, CatalogCard, ChatSession, HandoffState, Quote, QuoteCustomer, Turn } from './softline-api';
 import type { Source } from './agent-types';
 import { useLiveConversation } from './use-live-conversation';
 import './store-advisor.css';
@@ -183,8 +183,8 @@ const prompts: { title: string; text: string; icon: IconName }[] = [
   { title: 'Найти ключ активации', text: 'Где найти ключ активации после покупки?', icon: 'sources' },
 ];
 
-export function LiveStoreAdvisor() {
-  const chat = useLiveConversation();
+export function LiveStoreAdvisor({ selectedOffer }: { selectedOffer?: CatalogCard }) {
+  const chat = useLiveConversation(selectedOffer?.offer_id);
   const [draft, setDraft] = useState('');
   const transcript = useRef<HTMLDivElement>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
@@ -236,6 +236,9 @@ export function LiveStoreAdvisor() {
           <a className="store-manager-link" href={window.location.pathname} target="_blank" rel="noopener" aria-label="Кабинет менеджера">Кабинет менеджера <AppIcon name="external" size={13} /></a>
         </header>
         <DemoNotice />
+        {selectedOffer && <div className="store-offer-context">
+          <a href={`?view=product&offer=${encodeURIComponent(selectedOffer.offer_id)}`}>{selectedOffer.title}</a>
+        </div>}
         {hasConversation ? (
           <div className="store-transcript" ref={transcript} role="log" aria-label="Переписка" tabIndex={0}>
             {chat.loading && <p className="store-pending" role="status">Загружаем переписку…</p>}

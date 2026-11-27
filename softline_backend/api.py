@@ -2,6 +2,7 @@ import logging
 import os
 from pathlib import Path
 from secrets import compare_digest
+from sqlite3 import DatabaseError
 from time import perf_counter
 import re
 from typing import Annotated
@@ -13,9 +14,14 @@ from pydantic import BaseModel, StringConstraints
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
+from aisupport_ml.commerce.catalog import SoftlineCatalog
+
 from .advisor_api import advisor_router
-from .commerce_bridge import commerce_egress_configured
-from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, QuoteCustomer, QuoteSnapshot, TurnAccepted, TurnView
+from .commerce_bridge import commerce_egress_configured, product_card
+from .contracts import (
+    HandoffCase, HandoffView, MessageInput, MessageView, NewChat, ProductCard,
+    QuoteCustomer, QuoteSnapshot, TurnAccepted, TurnView,
+)
 from .quotes import render_quote
 from .readiness import ProviderStatus, catalog_status, commerce_snapshot_at
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
@@ -68,6 +74,24 @@ def create_app(
     @app.get("/manager", include_in_schema=False)
     def demo_manager():
         return FileResponse(demo / "manager.html")
+
+    commerce_catalog = SoftlineCatalog(commerce_index) if commerce_index is not None else None
+
+    @app.get("/api/catalog/offers/{offer_id}", response_model=ProductCard)
+    def get_catalog_offer(
+        offer_id: Annotated[str, StringConstraints(pattern=r"^[0-9]{2,40}$")], response: Response,
+    ):
+        if commerce_catalog is None:
+            raise HTTPException(503, "Catalog unavailable")
+        try:
+            offers = commerce_catalog.by_reference(offer_id)
+        except (DatabaseError, OSError):
+            raise HTTPException(503, "Catalog unavailable") from None
+        offer = next((item for item in offers if item.offer_id == offer_id), None)
+        if offer is None or (card := product_card(offer)) is None:
+            raise HTTPException(404, "Offer not found")
+        response.headers["Cache-Control"] = "no-store"
+        return card
 
     @app.get("/health/live")
     def live():

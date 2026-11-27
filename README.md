@@ -22,6 +22,7 @@
 
 | Где | Адрес |
 | --- | --- |
+| Карточка товара | [Открыть товар и задать вопрос](https://129.101.119.168:8443/advisor?view=product) |
 | Клиентский чат | [Открыть чат клиента](https://129.101.119.168:8443/advisor?view=chat) |
 | Кабинет менеджера | [Открыть журнал обращений](https://129.101.119.168:8443/advisor?view=journal) |
 
@@ -77,7 +78,7 @@ docker compose --env-file "$RUN_DIR/compose.env" up -d --wait
 curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
-После запуска откройте [чат](http://127.0.0.1:8080/advisor?view=chat) или [журнал менеджера](http://127.0.0.1:8080/advisor?view=journal). Ключ локального журнала — `jury-local-demo`.
+После запуска откройте [карточку тестового товара](http://127.0.0.1:8080/advisor?view=product&offer=1001), [чат](http://127.0.0.1:8080/advisor?view=chat) или [журнал менеджера](http://127.0.0.1:8080/advisor?view=journal). Ключ локального журнала — `jury-local-demo`.
 
 ### Остановка стенда
 

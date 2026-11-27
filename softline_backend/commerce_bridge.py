@@ -117,7 +117,7 @@ def commerce_provider_key() -> str:
     return os.getenv("POLZA_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
 
 
-def _card(offer: CatalogOffer, recommendation: Recommendation | None) -> ProductCard | None:
+def product_card(offer: CatalogOffer, recommendation: Recommendation | None = None) -> ProductCard | None:
     url = validated_url(offer.url)
     if url is None:
         return None
@@ -211,7 +211,7 @@ class CommerceBridge:
         except (ValueError, DatabaseError, OSError):
             offer = None
         if offer is not None and offer.offer_id == offer_id:
-            card = _card(offer, recommendation=None)
+            card = product_card(offer)
             unit = request["unit"].casefold()
             desktop = desktop_evidence(offer)
             per_desktop = desktop is not None
@@ -360,7 +360,7 @@ class CommerceBridge:
         recommendations = {detail.offer_id: detail for detail in result.recommendations}
         products = [
             card for offer in result.products
-            if (card := _card(offer, recommendations.get(offer.offer_id))) is not None
+            if (card := product_card(offer, recommendations.get(offer.offer_id))) is not None
         ]
         if result.outcome not in {"answer", "clarify", "recommend"} or len(products) != len(result.products):
             return TurnResult(
