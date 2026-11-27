@@ -256,8 +256,13 @@ class _Turn:
                 sources = ()
             return self.handoff("manager_requested", "Уточнить условия и проверить выбранные позиции.", sources)
 
-        if normalize(self.text) in {"спасибо", "спасибо большое", "большое спасибо", "благодарю"}:
+        query = normalize(self.text)
+        if query in {"спасибо", "спасибо большое", "большое спасибо", "благодарю"}:
             return TurnResult("answer", "Пожалуйста! Если появится ещё вопрос, напишите.", self.state)
+        if query.removeprefix("а ") in {"можно другое", "можно другой вариант", "есть другой вариант"}:
+            if context is None:
+                return self.clarification(SELECTION_QUESTION)
+            return self.clarification("Что нужно изменить в подборе: продукт, редакцию, цену или условия лицензии?")
 
         topic, escalate = support_request(self.text, self.state.support_topic)
         self.state = replace(self.state, support_topic=None)

@@ -455,6 +455,11 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(term.state.catalog_context.perpetual_only)
         self.assertEqual(term.state.catalog_context.product, "PDF Commander")
         self.assertNotEqual(term.outcome, "handoff")
+        self.assertNotIn("если важен, срок", term.text)
+        await self.chat.reply("known-term", "1", "MDaemon")
+        dated = await self.chat.reply("known-term", "2", "на 12 месяцев")
+        self.assertIn("число пользователей", dated.text)
+        self.assertNotIn("если важен, срок", dated.text)
 
     async def test_activation_billing_small_talk_and_vague_purchase(self):
         chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=self.index))
@@ -471,6 +476,17 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.model.expect("other")
         vague = await chat.reply("vague-verb-order", "1", "Хочу что-нибудь купить")
         self.assertIn("Какую задачу", vague.text)
+
+    async def test_alternative_without_details_asks_what_to_change(self):
+        result = await self.chat.reply("no-option", "1", "А можно другое?")
+        self.assertEqual(result.outcome, "clarify")
+        self.assertIn("Какую задачу", result.text)
+        self.assertFalse(result.trace.calls)
+        await self.chat.reply("change-option", "1", "Astra Linux")
+        alternative = await self.chat.reply("change-option", "2", "А можно другое?")
+        self.assertIn("Что нужно изменить", alternative.text)
+        self.assertEqual(alternative.state.catalog_context.product, "Astra Linux")
+        self.assertFalse(alternative.trace.calls)
 
     async def test_generic_license_name_requests_a_task(self):
         self.model.expect("other")

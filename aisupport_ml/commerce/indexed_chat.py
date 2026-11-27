@@ -589,7 +589,10 @@ def _named(
         return CatalogDecision("clarify", "Не нашёл позицию с подтверждёнными параметрами в текущем фиде. "
                                "Уточните редакцию, срок или артикул.", context)
     if not exact and len(offers) > 1 and context.users is None:
-        return CatalogDecision("clarify", "Для сравнения лицензий уточните число пользователей и, если важен, срок.", context)
+        question = "Для сравнения лицензий уточните число пользователей"
+        if context.term_months is None and not context.perpetual_only:
+            question += " и, если важен, срок"
+        return CatalogDecision("clarify", question + ".", context)
     if context.users is not None and not exact:
         available = tuple(item for item in offers if item.available is True) or offers
         smallest = min(item.user_limit for item in available)
