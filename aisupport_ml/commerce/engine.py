@@ -23,7 +23,7 @@ from .extraction import (
 from .indexed_chat import (
     INDEXED_PROMPT_VERSION, INDEXED_SCHEMA, INDEXED_SYSTEM, CatalogInput, backup_input, context_fact, decide,
     desktop_input, direct_sku, fallback_input, is_origin_follow_up, last_offer_sources, parse_catalog_input,
-    verified_named_input,
+    requests_catalog_name, verified_named_input,
 )
 from .offer_evidence import OfferCardEvidence
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
@@ -57,6 +57,8 @@ CUSTOMER_ORDER_REFERENCE = re.compile(r"\b(?:мо[йяеию]|наш\w*|поку
 DECLINE = re.compile(r"\b(?:нет|не\s+соглас\w*|не\s+подходит|не\s+устраивает)\b", re.IGNORECASE)
 INDEXED_MANAGER_TERMS = re.compile(r"\b(?:постоплат\w*\s+\d+|(?:дайте|сделайте|нужна)\s+(?:нам\s+)?скидк\w*|"
                                   r"(?:подготовьте|сделайте|оформите)\s+(?:кп|коммерческое предложение))\b", re.I)
+CATALOG_NAME_QUESTION = "Не нашёл товар по этому названию. Проверьте написание или пришлите артикул."
+
 SELECTION_QUESTION = (
     "Какую задачу нужно решить? Если товар уже выбран, укажите его название или артикул."
 )
@@ -254,6 +256,9 @@ class _Turn:
                 sources = ()
             return self.handoff("manager_requested", "Уточнить условия и проверить выбранные позиции.", sources)
 
+        if normalize(self.text) in {"спасибо", "спасибо большое", "большое спасибо", "благодарю"}:
+            return TurnResult("answer", "Пожалуйста! Если появится ещё вопрос, напишите.", self.state)
+
         topic, escalate = support_request(self.text, self.state.support_topic)
         self.state = replace(self.state, support_topic=None)
         eligible = self.agent.knowledge.eligible(self.now, None, self.customer_id)
@@ -273,9 +278,9 @@ class _Turn:
         previous = self.history[-2] if len(self.history) > 1 else None
         after_checkout_question = previous == Message("agent", CHECKOUT_QUESTION)
         if checkout := checkout_help(self.text, after_question=after_checkout_question):
-            if after_checkout_question:
-                return self.handoff("support_follow_up", checkout)
-            return self.clarification(checkout)
+            if checkout == CHECKOUT_QUESTION:
+                return self.clarification(checkout)
+            return self.handoff("support_follow_up", checkout)
         try:
             if (sku := direct_sku(self.text)) is not None:
                 patch = sku
@@ -305,6 +310,10 @@ class _Turn:
                 return self.handoff("insufficient_requirements", "Уточнить задачу клиента и продолжить подбор.")
             if requests_product_selection(self.text):
                 return self.clarification(SELECTION_QUESTION)
+            if requests_catalog_name(self.text):
+                if previous == Message("agent", CATALOG_NAME_QUESTION):
+                    return self.handoff("insufficient_requirements", "Уточнить наименование товара или артикул.")
+                return self.clarification(CATALOG_NAME_QUESTION)
             if patch is None:
                 return self.handoff("extraction_unavailable", "Проверить запрос клиента и продолжить подбор.")
         try:

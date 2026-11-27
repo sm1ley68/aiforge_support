@@ -41,9 +41,13 @@ _NEED = re.compile(
 )
 _SHOPPING_REQUEST = re.compile(
     r"\b(?:хочу|хотим|нужно|надо|планирую|планируем)\s+(?:купить|приобрести|заказать)\b"
+    r"|\b(?:хочу|хотим|нужно|надо)\s+что[- ]нибудь\s+(?:купить|приобрести|заказать)\b"
     r"|\bпомоги(?:те)?\s+(?:выбрать|найти)\b"
     r"|\b(?:нуж(?:ен|на|но|ны)|ищ(?:у|ем))\s+(?:что[- ]нибудь|решени\w*|инструмент\w*|"
     r"товар\w*|продукт\w*|лицензи\w*|софт\w*|программ\w*|по)\b"
+)
+_GENERIC_LICENSE_REQUEST = re.compile(
+    r"лицензи\w*(?: для (?:рабочи\w* станци\w*|сервер\w*|организаци\w*|компани\w*))?"
 )
 _REFERENCE = re.compile(
     r"\b(?:верси[юяи]|редакци[юяи]|дистрибутив)\s+|"
@@ -64,6 +68,10 @@ def _normalize(message: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", message).casefold().replace("ё", "е").split())
 
 
+def catalog_title_alias(phrase: str) -> str:
+    return _ALIASES.get(_normalize(phrase), phrase)
+
+
 def _has_named_reference(text: str, matches_catalog: Callable[[str], bool]) -> bool:
     for marker in _REFERENCE.finditer(text):
         fragment = _REFERENCE_STOP.split(text[marker.end():], maxsplit=1)[0]
@@ -74,7 +82,7 @@ def _has_named_reference(text: str, matches_catalog: Callable[[str], bool]) -> b
             phrase = " ".join(words[:length])
             if length == 1 and (len(phrase) < 4 or phrase.isdigit()):
                 continue
-            if matches_catalog(_ALIASES.get(phrase, phrase)):
+            if matches_catalog(catalog_title_alias(phrase)):
                 return True
     return False
 
@@ -87,7 +95,7 @@ def explicit_handoff_requested(message: str) -> bool:
 def requests_product_selection(message: str) -> bool:
     """Recognize a purchase or selection request even without technical requirements."""
     text = _normalize(message)
-    return bool(_NEED.search(text) or _SHOPPING_REQUEST.search(text))
+    return bool(_NEED.search(text) or _SHOPPING_REQUEST.search(text) or _GENERIC_LICENSE_REQUEST.fullmatch(text))
 
 
 def choose_first_route(

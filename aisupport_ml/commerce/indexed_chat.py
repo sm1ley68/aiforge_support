@@ -12,6 +12,7 @@ from .contracts import CatalogContext, Recommendation, Source
 from .offer_evidence import OfferCardEvidence, current_card, offer_card, verified_security_package, verified_term
 from .extraction import OPTIONAL_TEXT, _literal, object_schema
 from .retrieval import normalize
+from .routing import catalog_title_alias
 from .softline_evidence import (
     BACKUP_LICENSES, BACKUP_SOURCES, DesktopTask, MDAEMON_LICENSING, PACKAGES, PACKAGE_SOURCES,
     RUSSIAN_SOURCE, desktop_evidence, desktop_task,
@@ -46,7 +47,7 @@ INDEXED_SCHEMA = object_schema({
 _EDITION_SUFFIX = re.compile(r"\s+(standard|professional|enterprise|стандартный|профессиональный|расширенный)$", re.I)
 _EDITION_START = re.compile(r"\s+(standard|professional|enterprise|стандартный|профессиональный|расширенный)\b", re.I)
 _CLEAR_EDITION = re.compile(r"без привязки к редакции|без фильтра по редакции|(?:любая|любую) редакци\w*|редакция не важна", re.I)
-_USER_COUNT = re.compile(r"\b([1-9]\d{0,4})\s*(?:пользовател\w*|сотрудник\w*|человек\w*|рабочи\w* мест\w*)\b", re.I)
+_USER_COUNT = re.compile(r"\b([1-9]\d{0,4})\s*(?:пользовател\w*|сотрудник\w*|человек\w*|рабочи\w* (?:мест\w*|станци\w*))\b", re.I)
 _NODE_COUNT = re.compile(r"\b([1-9]\d{0,4})\s*(?:узл\w*|устройств\w*)\b", re.I)
 _TERM = re.compile(r"\b([1-9]\d?)\s*(мес\w*|год\w*|лет)\b", re.I)
 _BUDGET = re.compile(
@@ -100,7 +101,12 @@ _NEW_SELECTION = re.compile(
     re.I,
 )
 _BACKUP_REFINEMENT = re.compile(r"^(?:образ\w*|бессроч\w*|копи\w*|только|файл\w*|папк\w*|\d)", re.I)
-_NAMED_LOOKUP = re.compile(r"^(?:нуж(?:ен|на|ны|но)|интересует|ищу|хочу купить|найди)\s+(.{2,100})$", re.I)
+_NAMED_LOOKUP = re.compile(
+    r"^(?:(?:а|теперь|лучше)\s+)*(?:нуж(?:ен|на|ны|но)|интересует|ищ(?:у|ем)|"
+    r"(?:хочу|хотим|нужно|надо|планиру(?:ю|ем))\s+(?:купить|приобрести|заказать)|хочу|"
+    r"найди(?:те)?|подбер(?:и|ите)|подска(?:жи|жите)\s+по)\s+(.{2,100})$",
+    re.I,
+)
 _BARE_NAMED_LOOKUP = re.compile(r"[\w-]+(?: [\w-]+){1,5}")
 _NAMED_SEATS = re.compile(
     rf"(?:\s+(?:на|для)\s+|[,;]\s*){_USER_COUNT.pattern}"
@@ -110,8 +116,9 @@ _NAMED_SEATS = re.compile(
 _NAMED_FOLLOW_UP = re.compile(
     rf"(?:(?:покажите|покажи|можно)\s+)?(?:{_CLEAR_EDITION.pattern})"
     rf"|(?:(?:на|для)\s+)?{_USER_COUNT.pattern}"
+    rf"|(?:только\s+)?{_PERPETUAL.pattern}|(?:на\s+)?{_TERM.pattern}"
     r"|нужна новая лицензия|покупаем впервые"
-    r"|(?:(?:хочу\s+)?продлить|возобновить)\s+(?:(?:действующ\w*|просроч\w*)\s+)?(?:лицензи\w*|подписк\w*)"
+    r"|(?:(?:хочу\s+)?продлить|возобновить)(?:\s+(?:(?:действующ\w*|просроч\w*)\s+)?(?:лицензи\w*|подписк\w*))?"
     r"|(?:лицензия|подписка)\s+(?:уже\s+)?(?:просрочен\w*|ист[её]к(?:ла|ло)?)",
     re.I,
 )
@@ -293,10 +300,17 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
     return None
 
 
+def requests_catalog_name(text: str) -> bool:
+    return _NAMED_LOOKUP.fullmatch(" ".join(text.split()).strip(" ?!.")) is not None
+
+
 def verified_named_input(index: SoftlineCatalog, text: str, context: CatalogContext | None) -> CatalogInput | None:
-    request = " ".join(text.split()).strip(" ?!.")
-    if context is not None and context.mode == "named" and _NAMED_FOLLOW_UP.fullmatch(request):
-        return CatalogInput("continue")
+    request = " ".join(text.split()).strip(" ?!.«»“”\"")
+    if _NAMED_FOLLOW_UP.fullmatch(request):
+        if context is None:
+            return CatalogInput("other")
+        if context.mode == "named":
+            return CatalogInput("continue")
 
     names = []
     if match := _NAMED_LOOKUP.fullmatch(request):
@@ -305,15 +319,19 @@ def verified_named_input(index: SoftlineCatalog, text: str, context: CatalogCont
         (alias := _DEMO_NAMED.match(request)) and alias.start(1) == 0
     ):
         names.append(request)
-    clauses = re.split(r"[,;!?]+|\.(?=\s)", request)
+    clauses = re.split(r"[,;!?–—]+|\.(?=\s)", request)
     if len(clauses) > 1:
         names.extend(match[1] for clause in clauses if (match := _NAMED_LOOKUP.fullmatch(clause.strip())))
 
     for name in dict.fromkeys(names):
         if seats := _NAMED_SEATS.search(name):
             name = name[:seats.start()].strip()
+        name = name.strip(" «»“”\"")
         if _GENERIC_PURPOSE.fullmatch(name) or _requested_license(name):
             continue
+        if re.match(r"^лицензи\w*(?:\s+(?:для|на)\b|$)", name, re.I):
+            continue
+        name = catalog_title_alias(name)
         edition = _EDITION_SUFFIX.search(name)
         title = name[:edition.start()] if edition else name
         # Verify the product independently of a requested edition, which the feed may not confirm.
@@ -796,6 +814,8 @@ def _fact(
         message = ("О каком варианте речь? Укажите артикул."
                    if len(options) > 1 or (previous is not None and len(previous.shown_offers) > 1)
                    else "О каком товаре речь? Укажите название или артикул.")
+        if previous is not None and previous.product and not previous.shown_offers:
+            message = f"По «{previous.product}» конкретная позиция ещё не выбрана. Уточните редакцию или артикул."
         return CatalogDecision("clarify", message, previous)
 
     item, = options

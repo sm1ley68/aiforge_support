@@ -409,6 +409,83 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("оплате", follow_up.handoff.question)
         self.assertFalse(follow_up.trace.calls)
 
+    async def test_catalog_titles_handle_aliases_and_natural_purchase_wording(self):
+        variants = (
+            "астра линукс", "«Astra Linux»", "Хотим приобрести Astra Linux",
+            "Подскажите по Astra Linux, пожалуйста.", "Привет — нужна Astra Linux на 10 пользователей",
+        )
+        for message in variants:
+            with self.subTest(message=message):
+                result = await self.chat.reply(message, "1", message)
+                self.assertEqual(result.state.catalog_context.product.casefold(), "astra linux")
+                self.assertFalse(result.trace.calls)
+
+    async def test_quantity_followup_cannot_replace_product_or_choose_one_without_context(self):
+        await self.chat.reply("station-count", "1", "Astra Linux")
+        followup = await self.chat.reply("station-count", "2", "На 10 рабочих станций")
+        self.assertEqual(followup.state.catalog_context.product, "Astra Linux")
+        self.assertEqual(followup.state.catalog_context.users, 10)
+        self.assertFalse(followup.trace.calls)
+        price = await self.chat.reply("station-count", "3", "А сколько стоит?")
+        self.assertIn("Astra Linux", price.text)
+        self.assertFalse(price.products)
+        fresh = await self.chat.reply("only-count", "1", "для 15 пользователей")
+        self.assertEqual(fresh.outcome, "clarify")
+        self.assertIsNone(fresh.state.catalog_context)
+        self.assertFalse(fresh.products)
+        self.assertFalse(fresh.trace.calls)
+
+    async def test_payment_problem_handoff_and_explicit_topic_change(self):
+        for message in ("Платёж отклонён", "Списались деньги, но заказ не появился"):
+            result = await self.chat.reply(message, "1", message)
+            self.assertEqual(result.handoff.reason, "support_follow_up")
+            self.assertFalse(result.trace.calls)
+        await self.chat.reply("switch-checkout", "1", "Не могу оформить заказ на Astra Linux")
+        other = await self.chat.reply("switch-checkout", "2", "Лучше подберите Microsoft Project Professional 2024")
+        self.assertEqual([item.offer_id for item in other.products], ["473583"])
+        self.assertFalse(other.trace.calls)
+
+    async def test_followup_switches_product_and_preserves_license_constraints(self):
+        await self.chat.reply("switch-product", "1", "Microsoft Project Professional 2024")
+        switched = await self.chat.reply("switch-product", "2", "А теперь хочу Astra Linux")
+        self.assertEqual(switched.state.catalog_context.product, "Astra Linux")
+        self.assertFalse(switched.trace.calls)
+        await self.chat.reply("pdf-term", "1", "PDF Commander")
+        term = await self.chat.reply("pdf-term", "2", "бессрочная")
+        self.assertTrue(term.state.catalog_context.perpetual_only)
+        self.assertEqual(term.state.catalog_context.product, "PDF Commander")
+        self.assertNotEqual(term.outcome, "handoff")
+
+    async def test_activation_billing_small_talk_and_vague_purchase(self):
+        chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=self.index))
+        payment = await chat.reply("invoice", "1", "Как оплатить заказ по безналу?")
+        self.assertIn("банковским переводом", payment.text)
+        self.assertFalse(payment.trace.calls)
+        activation = await chat.reply("activation", "1", "Не могу активировать Astra Linux")
+        self.assertIn("Дистрибутивы и ключи", activation.text)
+        escalated = await chat.reply("activation", "2", "Ошибка не исчезла")
+        self.assertEqual(escalated.handoff.reason, "support_follow_up")
+        thanks = await chat.reply("thanks", "1", "Спасибо!")
+        self.assertEqual(thanks.outcome, "answer")
+        self.assertFalse(thanks.trace.calls)
+        self.model.expect("other")
+        vague = await chat.reply("vague-verb-order", "1", "Хочу что-нибудь купить")
+        self.assertIn("Какую задачу", vague.text)
+
+    async def test_generic_license_name_requests_a_task(self):
+        self.model.expect("other")
+        result = await self.chat.reply("only-license", "1", "лицензия для рабочих станций")
+        self.assertIn("Какую задачу", result.text)
+        self.assertFalse(result.products)
+        self.assertIsNone(result.state.catalog_context)
+
+    async def test_unconfirmed_exact_name_requests_spelling_or_sku(self):
+        self.model.expect("other")
+        result = await self.chat.reply("product-typo", "1", "Нужна Astra Linx")
+        self.assertEqual(result.outcome, "clarify")
+        self.assertIn("написание", result.text)
+        self.assertFalse(result.products)
+
     async def test_backup_uses_verified_licenses_for_changes_in_scope_budget_and_count(self):
         first = await self.chat.reply("backup", "1", "Подберите решение для резервного копирования")
         self.assertEqual(first.outcome, "clarify")
