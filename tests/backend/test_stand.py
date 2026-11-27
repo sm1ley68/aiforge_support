@@ -78,7 +78,7 @@ class StandDatabaseTests(unittest.TestCase):
     def test_readiness_checks_schema_and_catalog_without_network_provider_probe(self):
         self.assertEqual(
             self.ready().json(),
-            {"status": "ready", "database": "ready", "catalog": "unconfigured", "provider": "deterministic"},
+            {"status": "ready", "database": "ready", "queue": "ready", "catalog": "unconfigured", "provider": "deterministic"},
         )
         with tempfile.TemporaryDirectory() as folder:
             feed = Path(folder) / "feed.xml"
@@ -101,6 +101,21 @@ class StandDatabaseTests(unittest.TestCase):
         with self.store._connect() as db:
             db.execute("DROP TABLE chat_turns CASCADE")
         self.assertEqual(self.ready().json()["database"], "unavailable")
+
+    def test_readiness_reports_overdue_work_without_marking_a_fresh_turn_unready(self):
+        turn_id = self.submit()
+        self.assertEqual(self.ready().status_code, 200)
+        with self.store._connect() as db:
+            db.execute(
+                "UPDATE chat_turns SET updated_at = clock_timestamp() - interval '3 minutes' WHERE turn_id = %s",
+                (turn_id,),
+            )
+        ready = self.ready()
+        self.assertEqual(ready.status_code, 503)
+        self.assertEqual(ready.json()["queue"], "overdue")
+        self.assertEqual(ready.json()["database"], "ready")
+        self.assertIsNotNone(self.store.claim())
+        self.assertEqual(self.ready().status_code, 200)
 
     def test_existing_turns_survive_the_retry_schema_upgrade(self):
         turn_id = self.submit()

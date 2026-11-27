@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from importlib.resources import files
 from secrets import token_urlsafe
+from typing import Literal
 from uuid import UUID, uuid4
 
 from psycopg import Error, IsolationLevel, OperationalError, connect
@@ -99,6 +100,21 @@ class ChatStore:
         except Error:
             return False
         return True
+
+    def queue_health(self) -> Literal["ready", "overdue", "unavailable"]:
+        try:
+            with self._connect(connect_timeout=2) as db:
+                db.execute("SET LOCAL statement_timeout = '2s'")
+                row = db.execute(
+                    """SELECT EXISTS (
+                           SELECT 1 FROM chat_turns
+                           WHERE status IN ('queued', 'processing')
+                             AND updated_at < clock_timestamp() - interval '2 minutes'
+                       ) AS overdue"""
+                ).fetchone()
+        except Error:
+            return "unavailable"
+        return "overdue" if row["overdue"] else "ready"
 
     def initialize(self):
         with self._connect() as db:

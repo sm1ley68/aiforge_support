@@ -65,8 +65,8 @@ def process_one(
     started = monotonic()
     outcome = "failed"
     logger.info("turn_claimed turn_id=%s attempt=%d", turn.turn_id, turn.attempts)
-    history = store.previous_messages(turn)
     try:
+        history = store.previous_messages(turn)
         if commerce is not None:
             result = commerce.reply(turn, history, store.previous_commerce_state(turn))
         elif MANAGER_REQUEST.fullmatch(" ".join(turn.message_text.casefold().split())):
@@ -102,6 +102,9 @@ def process_one(
                         catalog_selection=reference if article.get("sku") else None,
                         sources=[Source(title=article["question"], url=article["sourceUrl"])],
                     )
+    except OperationalError:
+        # The lease lets a worker reclaim this turn when the database recovers.
+        raise
     except Exception as exc:
         logger.warning("turn_error turn_id=%s error=%s", turn.turn_id, type(exc).__name__)
         saved = store.finish(turn, error="processing_failed")

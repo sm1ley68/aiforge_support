@@ -8,7 +8,8 @@ const storageKey = 'softline.live-chat.v1';
 
 function restore(): SavedChat {
   try {
-    return JSON.parse(sessionStorage.getItem(storageKey) || '{}');
+    const stored = JSON.parse(sessionStorage.getItem(storageKey) || '{}');
+    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
   } catch {
     return {};
   }
@@ -20,6 +21,7 @@ export function useLiveConversation() {
   const [results, setResults] = useState<Record<string, Turn>>({});
   const [handoff, setHandoff] = useState<HandoffState>();
   const [loading, setLoading] = useState(Boolean(saved.session));
+  const [sessionUnavailable, setSessionUnavailable] = useState(false);
   const [syncError, setSyncError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -48,8 +50,10 @@ export function useLiveConversation() {
     let timer: number;
     let running = false;
     let refreshQueued = false;
+    let unavailable = false;
 
     async function refresh() {
+      if (controller.signal.aborted || unavailable) return;
       if (running) {
         refreshQueued = true;
         return;
@@ -61,7 +65,16 @@ export function useLiveConversation() {
         const history = await json<ChatMessage[]>(`${chatPath(activeSession)}/messages`, options);
         if (controller.signal.aborted) return;
         setMessages(history);
-        const pendingTurnId = latest.current.pending?.turnId;
+        const pendingMessage = latest.current.pending;
+        let pendingTurnId = pendingMessage?.turnId;
+        if (pendingMessage && !pendingTurnId) {
+          const acceptedMessage = history.find(item => item.role === 'user' && item.client_message_id === pendingMessage.id);
+          if (acceptedMessage) {
+            pendingTurnId = acceptedMessage.turn_id;
+            commit({ session: activeSession, pending: { ...pendingMessage, turnId: pendingTurnId } });
+            setSubmitError('');
+          }
+        }
         const turnIds = new Set(history.filter(item => item.role === 'user').map(item => item.turn_id));
         if (pendingTurnId) turnIds.add(pendingTurnId);
         const stale = [...turnIds].filter(id => resultCache.current[id]?.status !== 'succeeded');
@@ -81,14 +94,20 @@ export function useLiveConversation() {
         }
         setSyncError(updates.some(update => update.status === 'rejected') ? 'Часть переписки ещё не загрузилась.' : '');
       } catch (error) {
-        if (!controller.signal.aborted) setSyncError(error instanceof ApiError && error.status === 404
-          ? 'Этот диалог больше недоступен. Начните новый диалог.'
-          : 'Соединение прервалось. Обновляем переписку…');
+        if (!controller.signal.aborted) {
+          unavailable = error instanceof ApiError && (error.status === 404 || error.status === 401);
+          setSessionUnavailable(unavailable);
+          setSyncError(unavailable
+            ? 'Этот диалог больше недоступен. Начните новый диалог.'
+            : 'Соединение прервалось. Обновляем переписку…');
+        }
       } finally {
         running = false;
         if (!controller.signal.aborted) {
           setLoading(false);
-          timer = window.setTimeout(refresh, refreshQueued ? 0 : latest.current.pending?.turnId ? 850 : document.hidden ? 5000 : 1500);
+          if (!unavailable) {
+            timer = window.setTimeout(refresh, refreshQueued ? 0 : latest.current.pending?.turnId ? 850 : document.hidden ? 5000 : 1500);
+          }
           refreshQueued = false;
         }
       }
@@ -137,13 +156,20 @@ export function useLiveConversation() {
         const { turn_id } = await json<{ turn_id: string }>(`${chatPath(activeSession)}/${message.manager ? 'manager-messages' : 'messages'}`, {
           ...options, body: JSON.stringify({ client_message_id: message.id, text: message.text }),
         });
-        commit({ session: activeSession, pending: { ...message, turnId: turn_id } });
+        const current = latest.current.pending;
+        if (current?.id === message.id && !current.turnId) {
+          commit({ session: activeSession, pending: { ...message, turnId: turn_id } });
+        }
       }
       refreshNow.current();
     } catch (error) {
-      if (!controller.signal.aborted) setSubmitError(error instanceof ApiError && error.status === 404
-        ? 'Не удалось восстановить диалог. Можно начать новый.'
-        : 'Не удалось получить подтверждение. Повторите отправку, чтобы продолжить этот же запрос.');
+      const current = latest.current.pending;
+      if (!controller.signal.aborted && current?.id === message.id && (retryFailed || !current.turnId)) {
+        setSubmitError(error instanceof ApiError && error.status === 404
+          ? 'Не удалось восстановить диалог. Можно начать новый.'
+          : 'Не удалось получить подтверждение. Повторите отправку, чтобы продолжить этот же запрос.');
+        refreshNow.current();
+      }
     } finally {
       if (inFlight.current === controller) {
         inFlight.current = null;
@@ -182,12 +208,13 @@ export function useLiveConversation() {
     setSyncError('');
     setBusy(false);
     setLoading(false);
+    setSessionUnavailable(false);
     setAttempt(value => value + 1);
   }
 
   const pendingFailed = Boolean(pending?.turnId && results[pending.turnId]?.status === 'failed');
   return {
-    session, pending, pendingFailed, messages, results, handoff, loading, busy, syncError, submitError,
+    session, pending, pendingFailed, messages, results, handoff, loading, busy, sessionUnavailable, syncError, submitError,
     send, retry, reset, record, refresh: () => refreshNow.current(),
   };
 }

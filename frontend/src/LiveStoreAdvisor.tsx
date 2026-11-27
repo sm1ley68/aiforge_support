@@ -190,7 +190,7 @@ export function LiveStoreAdvisor() {
   const lastUser = useRef<HTMLDivElement>(null);
   const firstHandoff = Object.values(chat.results).find(turn => turn.outcome === 'handoff');
   const latestHandoff = Object.values(chat.results).findLast(turn => turn.outcome === 'handoff');
-  const hasConversation = chat.messages.length > 0 || Boolean(chat.pending) || chat.loading;
+  const hasConversation = chat.messages.length > 0 || Boolean(chat.pending) || chat.loading || chat.sessionUnavailable;
   const unsyncedMessage = chat.pending && !chat.messages.some(message => message.role === 'user' &&
       (message.turn_id === chat.pending?.turnId || message.client_message_id === chat.pending?.id))
     ? chat.pending : undefined;
@@ -270,11 +270,12 @@ export function LiveStoreAdvisor() {
         )}
         <footer className="store-panel-footer">
           {chat.syncError && <p className="store-form-error" role="status">{chat.syncError}</p>}
-          {(chat.submitError || chat.pendingFailed) && <div className="store-send-retry" role="alert">
+          {!chat.sessionUnavailable && (chat.submitError || chat.pendingFailed) && <div className="store-send-retry" role="alert">
             <p>{chat.submitError || 'Помощник не смог завершить запрос.'}</p>
             {chat.pending && <button type="button" disabled={chat.busy} onClick={chat.retry}>Повторить отправку</button>}
           </div>}
-          {closed ? <p className="store-closed-note">Обращение закрыто. Для нового вопроса начните новый диалог.</p> : (
+          {closed && <p className="store-closed-note">Обращение закрыто. Для нового вопроса начните новый диалог.</p>}
+          {!closed && !chat.sessionUnavailable && (
             <form className="store-composer" onSubmit={event => { event.preventDefault(); send(draft); }}>
               <label className="store-visually-hidden" htmlFor="live-store-question">Сообщение помощнику</label>
               <textarea id="live-store-question" ref={editor} rows={2} maxLength={8000} value={draft}
@@ -283,8 +284,8 @@ export function LiveStoreAdvisor() {
             </form>
           )}
           <div className="store-footer-actions">
-            {!firstHandoff && <button type="button" disabled={Boolean(chat.pending) || chat.loading} onClick={() => send('Позовите менеджера')}><AppIcon name="support" size={16} /> Позвать менеджера</button>}
-            {hasConversation && <button type="button" disabled={chat.busy || Boolean(chat.pending && !chat.submitError && !chat.pendingFailed)} onClick={() => { chat.reset(); setDraft(''); }}>Новый диалог</button>}
+            {!firstHandoff && !chat.sessionUnavailable && <button type="button" disabled={Boolean(chat.pending) || chat.loading} onClick={() => send('Позовите менеджера')}><AppIcon name="support" size={16} /> Позвать менеджера</button>}
+            {hasConversation && <button type="button" disabled={chat.busy || Boolean(chat.pending && !chat.submitError && !chat.pendingFailed && !chat.sessionUnavailable)} onClick={() => { chat.reset(); setDraft(''); }}>Новый диалог</button>}
           </div>
         </footer>
       </section>

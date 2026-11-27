@@ -77,12 +77,14 @@ def create_app(
     def ready(response: Response):
         database = "ready" if store.is_ready() else "unavailable"
         catalog = catalog_status(commerce_index or catalog_index, commerce=commerce_index is not None)
-        healthy = database == "ready" and catalog in {"ready", "unconfigured"}
+        queue = store.queue_health() if database == "ready" else "unavailable"
+        healthy = database == "ready" and queue == "ready" and catalog in {"ready", "unconfigured"}
         response.headers["Cache-Control"] = "no-store"
         response.status_code = 200 if healthy else 503
         return {
             "status": "ready" if healthy else "unavailable",
             "database": database,
+            "queue": queue,
             "catalog": catalog,
             "provider": provider_status,
             **({"catalogSnapshotAt": commerce_snapshot_at(commerce_index)} if commerce_index is not None and catalog == "ready" else {}),

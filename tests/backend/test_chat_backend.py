@@ -6,7 +6,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
-from psycopg import connect, sql
+from psycopg import OperationalError, connect, sql
 from psycopg.conninfo import make_conninfo
 
 from softline_backend.api import create_app
@@ -81,6 +81,18 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(current.turn_id, expired.turn_id)
         self.assertFalse(self.store.finish(expired, error="processing_failed"))
         self.assertTrue(self.store.finish(current, error="processing_failed"))
+
+    def test_database_disconnect_during_processing_leaves_claim_recoverable(self):
+        turn_id = self.submit("transient-db", "Вопрос").json()["turn_id"]
+        path = f"{self.path}/turns/{turn_id}"
+        with patch.object(self.store, "match_manager_knowledge", side_effect=OperationalError):
+            with self.assertRaises(OperationalError):
+                process_one(self.store)
+        self.assertEqual(self.client.get(path, headers=self.headers).json()["status"], "processing")
+        with self.store._connect() as db:
+            db.execute("UPDATE chat_turns SET lease_until = clock_timestamp() WHERE turn_id = %s", (turn_id,))
+        self.assertTrue(process_one(self.store))
+        self.assertEqual(self.client.get(path, headers=self.headers).json()["status"], "succeeded")
 
     def test_handler_receives_only_previous_turns(self):
         self.submit("first", "Сервер на 50 пользователей")
