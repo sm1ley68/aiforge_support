@@ -11,6 +11,9 @@ from .polza_egress import RESPONSE_FIELDS, SYSTEM, LocalFilter, block, check_tra
 
 PROFILE = "qwen-local"
 MODEL = "qwen2.5:32b-instruct-q4_K_M"
+MODEL_4B = "qwen3:4b-instruct-2507-q4_K_M"
+MODELS = frozenset({MODEL, MODEL_4B})
+DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api/chat"
 ENDPOINTS = frozenset(
     f"http://{host}:11434/api/chat" for host in ("127.0.0.1", "localhost", "host.docker.internal", "ollama")
 )
@@ -18,16 +21,20 @@ logger = logging.getLogger(__name__)
 
 
 class LocalCatalogModel:
-    model = MODEL
-
-    def __init__(self, endpoint: str, checker: LocalFilter | None, *, transport: httpx.AsyncBaseTransport | None = None):
+    def __init__(
+        self, endpoint: str, checker: LocalFilter | None, *, model: str = MODEL,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ):
         self.endpoint = endpoint
+        self.model = model
         self.checker = checker
         self.transport = transport
 
     async def complete(self, _system, text, schema):
         if self.endpoint not in ENDPOINTS:
             block("invalid_local_endpoint")
+        if self.model not in MODELS:
+            block("model_not_allowed")
         if self.checker is None:
             block("filter_unavailable")
         if schema != INDEXED_SCHEMA or INDEXED_SCHEMA["properties"].keys() != RESPONSE_FIELDS:
@@ -40,6 +47,10 @@ class LocalCatalogModel:
             "format": INDEXED_SCHEMA, "stream": False,
             "options": {"temperature": 0, "num_predict": 384},
         }
+
+        if self.model == MODEL_4B:
+            expected["options"].update(num_ctx=2048, seed=42)
+            expected["think"] = False
 
         async def validate_request(request: httpx.Request):
             check_transport_request(request, self.endpoint, expected, credentials=False)

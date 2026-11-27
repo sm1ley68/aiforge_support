@@ -87,7 +87,7 @@ SOFTLINE_CHAT_TEST_INDEX=/path/to/catalog.sqlite python -m unittest discover -s 
 
 ## Профиль Qwen для замера
 
-В отдельном окружении запустите Ollama и загрузите модель командой `ollama pull qwen2.5:32b-instruct-q4_K_M`. Задайте `COMMERCE_MODEL_PROFILE=qwen-local`. Для процесса на хосте по умолчанию используется `http://127.0.0.1:11434/api/chat`. В Docker Desktop используйте `http://host.docker.internal:11434/api/chat` или адрес сервиса `http://ollama:11434/api/chat` в закрытой сети Compose. Адрес задаётся через `COMMERCE_OLLAMA_ENDPOINT`.
+В отдельном окружении запустите Ollama и загрузите модель командой `ollama pull qwen2.5:32b-instruct-q4_K_M`. Задайте `COMMERCE_MODEL_PROFILE=qwen-local`. Для процесса на хосте по умолчанию используется `http://127.0.0.1:11434/api/chat`. В Docker Desktop используйте `http://host.docker.internal:11434/api/chat` или адрес сервиса `http://ollama:11434/api/chat` в закрытой сети Compose. Адрес задаётся через `COMMERCE_OLLAMA_ENDPOINT`. Для прогона на меньшей модели задайте `COMMERCE_OLLAMA_MODEL=qwen3:4b-instruct-2507-q4_K_M` и загрузите эти веса. [Инструкция по обоим профилям](softline-model-profiles.md).
 
 Qwen получает тот же технический объект, что и Haiku. Запрос проходит локальную проверку и проверку тела и адреса на уровне HTTP. Профиль не отправляет ключ Polza и не переходит на Haiku при сбое. Для сравнительного прогона дождитесь загрузки модели и для обоих профилей используйте один набор синтетических запросов. `/health/ready` показывает конфигурацию. Живой вызов проверяйте отдельно по результату хода и строке `ollama_extraction` в логах worker.
 

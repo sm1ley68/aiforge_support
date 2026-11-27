@@ -1,0 +1,34 @@
+services:
+  ollama:
+    image: ollama/ollama:0.12.10
+    environment:
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [model]
+
+  api:
+    environment: &local-profile
+      COMMERCE_MODEL_PROFILE: qwen-local
+      COMMERCE_OLLAMA_ENDPOINT: http://ollama:11434/api/chat
+      COMMERCE_OLLAMA_MODEL: qwen3:4b-instruct-2507-q4_K_M
+      POLZA_EGRESS_MODE: disabled
+
+  worker:
+    environment: *local-profile
+    networks: [default, model]
+    depends_on:
+      api:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+networks:
+  model:
+    internal: true
+
+volumes:
+  ollama-models:

@@ -4,6 +4,8 @@ import argparse
 import hashlib
 import json
 import logging
+import math
+import statistics
 import os
 from pathlib import Path
 import re
@@ -18,15 +20,19 @@ from psycopg.conninfo import make_conninfo
 from evals import run_softline
 from softline_backend.api import create_app
 from softline_backend.commerce_bridge import commerce_from_env, commerce_egress_configured
+from softline_backend.ollama_profile import DEFAULT_ENDPOINT, MODEL_4B, PROFILE
 from softline_backend.store import ChatStore
 from softline_backend.worker import process_one
 
 HERE = Path(__file__).resolve().parent
 EGRESS = re.compile(r"polza_egress turn_id=([0-9a-f-]+) decision=(\w+) category=(\w+)")
+EXTRACTION = re.compile(
+    r"(polza|ollama)_extraction turn_id=([0-9a-f-]+) (?:status=(\w+) )?duration_ms=(\d+)"
+)
 MODEL_SETTING_KEYS = {"POLZA_API_KEY", "LLM_API_KEY", "LLM_MODEL", "POLZA_TASK_MODEL", "LLM_BASE_URL"}
 
 
-def settings(env_file, live, catalog):
+def settings(env_file, live, catalog, local=False):
     values = {}
     if env_file is not None and live:
         for line in env_file.read_text(encoding="utf-8").splitlines():
@@ -34,32 +40,36 @@ def settings(env_file, live, catalog):
             if sep and key.strip() in MODEL_SETTING_KEYS:
                 values[key.strip()] = value.strip().strip("\"'")
     configured = {**values, "POLZA_EGRESS_MODE": "real" if live else "disabled",
-                  "COMMERCE_CATALOG_INDEX_PATH": str(catalog)}
+                  "COMMERCE_CATALOG_INDEX_PATH": str(catalog),
+                  "COMMERCE_MODEL_PROFILE": PROFILE if local else "polza" if live else "offline"}
     if not live:
         configured.update(POLZA_API_KEY="", LLM_API_KEY="")
+    if local:
+        configured.update(COMMERCE_OLLAMA_MODEL=MODEL_4B, COMMERCE_OLLAMA_ENDPOINT=DEFAULT_ENDPOINT)
     return configured
 
 
 def invoke(manifest, catalog, mode, env_file):
     live = mode == "live"
+    local = mode == "ollama"
     database_url = os.environ["TEST_DATABASE_URL"]
     schema_name = f"agent_eval_{uuid4().hex}"
     schema = sql.Identifier(schema_name)
-    with (patch.dict(os.environ, settings(env_file, live, catalog)),
+    with (patch.dict(os.environ, settings(env_file, live, catalog, local)),
           connect(database_url, autocommit=True) as db):
-        if live and not commerce_egress_configured():
-            raise RuntimeError("The guarded Polza connection is not configured")
+        if (live or local) and not commerce_egress_configured():
+            raise RuntimeError("The guarded model profile is not configured")
         commerce = commerce_from_env()
         db.execute(sql.SQL("CREATE SCHEMA {}").format(schema))
         try:
             store = ChatStore(make_conninfo(database_url, options=f"-c search_path={schema_name}"))
             store.initialize()
-            return run_api(manifest, store, commerce, live)
+            return run_api(manifest, store, commerce, live, local=local)
         finally:
             db.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(schema))
 
 
-def run_api(manifest, store, commerce, live):
+def run_api(manifest, store, commerce, live, *, local=False):
     manager_token = uuid4().hex
     with TemporaryDirectory() as folder, TestClient(create_app(store, manager_token=manager_token)) as client:
         log = Path(folder) / "worker.log"
@@ -108,7 +118,20 @@ def run_api(manifest, store, commerce, live):
         report["failed_turns"] = sum(bool(turn["failures"]) for turn in totals)
         report["passed_cases"] = sum(not any(turn["failures"] for turn in case["turns"]) for case in report["cases"])
         report["provider_usage"] = run_softline.usage_summary(log, report, None, None)
-        report["mode"] = "live" if live else "offline"
+        provider = "ollama" if local else "polza"
+        calls = [(turn_id, status or "ok", int(duration)) for model, turn_id, status, duration in EXTRACTION.findall(worker_log)
+                 if model == provider]
+        values = sorted(duration for _, status, duration in calls if status == "ok")
+        report["extraction"] = {
+            "calls": len(calls), "succeeded": len(values),
+            "p50_ms": round(statistics.median(values)) if values else None,
+            "p95_ms": values[math.ceil(0.95 * len(values)) - 1] if values else None,
+        }
+        reports_by_turn = {turn.get("turn_id"): turn for turn in totals}
+        for turn_id, status, duration in calls:
+            if turn_id in reports_by_turn:
+                reports_by_turn[turn_id]["extraction"] = {"status": status, "ms": duration}
+        report["mode"] = "ollama" if local else "live" if live else "offline"
         return report
 
 
@@ -116,7 +139,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("split", choices=("validation", "held_out"))
     parser.add_argument("--catalog", type=Path, required=True)
-    parser.add_argument("--mode", choices=("offline", "live"), required=True)
+    parser.add_argument("--mode", choices=("offline", "live", "ollama"), required=True)
     parser.add_argument("--env-file", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

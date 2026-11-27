@@ -1,5 +1,6 @@
 import marimo
 
+__generated_with = "0.26.0"
 app = marimo.App(width="medium")
 
 
@@ -13,7 +14,11 @@ def _():
     from matplotlib import pyplot as plt
 
     work = Path(os.environ.get("SOFTLINE_AGENT_EVAL_REPORTS", Path(__file__).with_name("reports")))
-    return json, mo, plt, work
+    profile_report = Path(os.environ.get(
+        "SOFTLINE_PROFILE_REPORT",
+        Path(__file__).resolve().parents[1] / ".local/profile-comparison/closed-v1-report.json",
+    ))
+    return json, mo, plt, profile_report, work
 
 
 @app.cell
@@ -51,6 +56,23 @@ def _(json, mo, work):
     else:
         outcome = mo.md("Финальный отчёт появится после однократной приёмки.")
     outcome
+    return
+
+
+@app.cell
+def _(json, mo, profile_report):
+    if not profile_report.is_file():
+        comparison = mo.md("Сравнение моделей доступно в отчёте проекта.")
+    else:
+        profiles = json.loads(profile_report.read_text())["profiles"]
+        comparison = mo.ui.table([
+            {"Профиль": name, "Диалоги": f"{profile['passed_cases']}/{profile['case_count']}",
+             "p95 хода, с": profile["p95_ms"] / 1000,
+             "Успешные вызовы": f"{profile['extraction']['succeeded']}/{profile['extraction']['calls']}",
+             "p95 вызова, с": profile["extraction"]["p95_ms"] / 1000 if profile["extraction"]["p95_ms"] else None}
+            for name, profile in profiles.items()
+        ])
+    comparison
     return
 
 

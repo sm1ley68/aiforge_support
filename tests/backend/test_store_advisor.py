@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
 from threading import Event, Thread
 from time import sleep
@@ -8,7 +10,10 @@ from fastapi.testclient import TestClient
 from psycopg import connect, sql
 from psycopg.conninfo import make_conninfo
 
+from aisupport_ml.commerce.catalog import build_catalog
+from aisupport_ml.polza import DEFAULT_MODEL
 from softline_backend.api import create_app
+from softline_backend.commerce_bridge import CatalogModel, CommerceBridge
 from softline_backend.store import ChatStore
 from softline_backend.worker import process_one
 
@@ -24,10 +29,11 @@ class StoreAdvisorTests(unittest.TestCase):
         self.store = ChatStore(make_conninfo(dsn, options=f"-c search_path={schema.as_string()}"))
         self.store.initialize()
         stop = Event()
+        self.commerce = None
 
         def run_worker():
             while not stop.is_set():
-                if not process_one(self.store):
+                if not process_one(self.store, commerce=self.commerce):
                     stop.wait(0.01)
 
         worker = Thread(target=run_worker)
@@ -160,3 +166,63 @@ class StoreAdvisorTests(unittest.TestCase):
         metrics = client.get("/api/requests/metrics", headers=operator)
         self.assertEqual(metrics.status_code, 200, metrics.text)
         self.assertEqual(metrics.json()["managerAnswered"], 1)
+
+
+    def test_published_manager_answer_is_found_by_paraphrase_only_for_the_correct_product(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder)
+            feed = path / "feed.xml"
+            index = path / "catalog.sqlite"
+            feed.write_text(
+                '<yml_catalog date="2026-11-25 14:12"><shop><offers>'
+                '<offer id="473583" available="true"><vendorCode>EP2-07001</vendorCode>'
+                '<name>Microsoft Project Professional 2024</name>'
+                '<url>https://store.softline.ru/microsoft/ep2-07001-473583/</url></offer>'
+                '<offer id="339688" available="true"><vendorCode>HBS10</vendorCode>'
+                '<name>Handy Backup Standard</name>'
+                '<url>https://store.softline.ru/novosoft/hbs10-339688/</url></offer>'
+                '<offer id="421471" available="true"><vendorCode>PCSCNL</vendorCode>'
+                '<name>Кибер Бэкап Стандартная</name>'
+                '<url>https://store.softline.ru/cyberprotect/pcs16nl-421471/</url></offer>'
+                '</offers></shop></yml_catalog>', encoding="utf-8",
+            )
+            build_catalog(feed, index)
+            self.commerce = CommerceBridge(index, CatalogModel("", DEFAULT_MODEL))
+            self._check_published_article_scope()
+
+    def _check_published_article_scope(self):
+        client = self.client
+        operator = {"Authorization": "Bearer advisor-manager"}
+        client.post("/api/consultation", json={"message": "Позовите менеджера"})
+        handoff, = client.get("/manager/handoffs", headers=operator).json()
+        path = f"/api/requests/{handoff['handoff_id']}"
+        sent = client.post(path + "/reply", json={"text": "Приватное сообщение менеджера."}, headers=operator)
+        self.assertEqual(sent.status_code, 200, sent.text)
+        article = {
+            "question": "Как обновить список модулей?",
+            "answer": "В тестовом меню откройте список и нажмите «Обновить».",
+            "sku": "EP2-07001",
+            "sourceUrl": "https://store.softline.ru/microsoft/ep2-07001-473583/",
+            "publicContentConfirmed": True,
+        }
+        published = client.post(path + "/knowledge", json=article, headers=operator)
+        self.assertEqual(published.status_code, 200, published.text)
+
+        def ask(message, conversation=None):
+            response = client.post("/api/consultation", json={"message": message, "conversationId": conversation})
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()
+
+        exact = ask("Где освежить перечень компонентов EP2-07001?")
+        self.assertEqual(exact["reply"], article["answer"])
+        self.assertEqual(exact["sources"][0]["url"], article["sourceUrl"])
+        active = ask("Артикул EP2-07001")["conversationId"]
+        self.assertEqual(ask("Где в этой редакции освежить перечень компонентов?", active)["reply"], article["answer"])
+
+        for query in ("Где освежить перечень компонентов HBS10?", "Где освежить перечень компонентов?",
+                      "Нельзя освежить перечень компонентов EP2-07001?", "Как удалить список компонентов EP2-07001?",
+                      "Где освежить перечень компонентов PCSCNL?"):
+            with self.subTest(query=query):
+                self.assertNotEqual(ask(query)["reply"], article["answer"])
+        other = ask("Артикул HBS10", active)["conversationId"]
+        self.assertNotEqual(ask("Где в этой версии освежить перечень компонентов?", other)["reply"], article["answer"])

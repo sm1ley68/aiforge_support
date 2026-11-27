@@ -340,6 +340,15 @@ class ChatStore:
                 return rows[0]["article"]
             return None
 
+    def manager_knowledge_candidates(self, sku: str | None) -> list[dict]:
+        with self._connect() as db:
+            return [row["article"] for row in db.execute(
+                """SELECT article FROM manager_knowledge
+                   WHERE article ->> 'sku' IS NULL OR lower(article ->> 'sku') = lower(%s)
+                   LIMIT 501""",
+                (sku,),
+            )]
+
     def confirm_customer_resolution(self, chat_id: UUID, token: str, turn_id: UUID) -> None:
         with self._connect() as db:
             self._check_access(db, chat_id, token)

@@ -24,7 +24,10 @@ from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
 from .contracts import HandoffDetails, MessageView, ProductCard, QuoteSnapshot, Source, TurnResult, VerifiedFact
 from .knowledge import validated_url
-from .ollama_profile import ENDPOINTS as OLLAMA_ENDPOINTS, PROFILE as OLLAMA_PROFILE, LocalCatalogModel
+from .ollama_profile import (
+    DEFAULT_ENDPOINT as OLLAMA_DEFAULT_ENDPOINT, ENDPOINTS as OLLAMA_ENDPOINTS, MODEL as OLLAMA_DEFAULT_MODEL,
+    MODELS as OLLAMA_MODELS, PROFILE as OLLAMA_PROFILE, LocalCatalogModel,
+)
 from .polza_egress import (
     ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, check_transport_request, load_egress_filter, polza_scope, prepare, record,
 )
@@ -375,7 +378,11 @@ def _profile_from_env() -> str:
 
 
 def _ollama_url() -> str:
-    return os.getenv("COMMERCE_OLLAMA_ENDPOINT", "").strip() or "http://127.0.0.1:11434/api/chat"
+    return os.getenv("COMMERCE_OLLAMA_ENDPOINT", "").strip() or OLLAMA_DEFAULT_ENDPOINT
+
+
+def _ollama_model() -> str:
+    return os.getenv("COMMERCE_OLLAMA_MODEL", "").strip() or OLLAMA_DEFAULT_MODEL
 
 
 def commerce_from_env() -> CommerceBridge | None:
@@ -386,7 +393,8 @@ def commerce_from_env() -> CommerceBridge | None:
     verify_site = os.getenv("COMMERCE_VERIFY_SITE_CARD", "") == "real"
     if profile == OLLAMA_PROFILE:
         _, checker = load_egress_filter(enabled=True)
-        return CommerceBridge(Path(path), LocalCatalogModel(_ollama_url(), checker), model_timeout=40, verify_site=verify_site)
+        return CommerceBridge(Path(path), LocalCatalogModel(_ollama_url(), checker, model=_ollama_model()),
+                              model_timeout=40, verify_site=verify_site)
     key = commerce_provider_key()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     enabled, checker = load_egress_filter()
@@ -400,7 +408,7 @@ def commerce_egress_configured() -> bool:
     profile = _profile_from_env()
     if profile == OLLAMA_PROFILE:
         _, checker = load_egress_filter(enabled=True)
-        return checker is not None and _ollama_url() in OLLAMA_ENDPOINTS
+        return checker is not None and _ollama_url() in OLLAMA_ENDPOINTS and _ollama_model() in OLLAMA_MODELS
     if profile != "polza":
         return False
     enabled, checker = load_egress_filter()
