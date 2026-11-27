@@ -15,6 +15,8 @@ from .contracts import (
     HandoffView,
     MessageView,
     NewChat,
+    QuoteCustomer,
+    QuoteSnapshot,
     TurnResult,
     TurnView,
 )
@@ -184,6 +186,29 @@ class ChatStore:
         result.pop("commerce_state", None)
         return TurnView(**row, **result)
 
+    def save_quote_customer(self, chat_id: UUID, token: str, turn_id: UUID, customer: QuoteCustomer) -> QuoteSnapshot:
+        with self._connect() as db:
+            self._check_access(db, chat_id, token)
+            row = db.execute(
+                """SELECT result -> 'quote' AS quote, clock_timestamp() AS saved_at FROM chat_turns
+                   WHERE chat_id = %s AND turn_id = %s AND status = 'succeeded'
+                   FOR UPDATE""",
+                (chat_id, turn_id),
+            ).fetchone()
+            if row is None or row["quote"] is None:
+                raise TurnNotFound
+            quote = QuoteSnapshot.model_validate(row["quote"])
+            if quote.customer is not None:
+                if quote.customer != customer:
+                    raise MessageConflict
+                return quote
+            quote = quote.model_copy(update={"customer": customer, "customer_saved_at": row["saved_at"]})
+            db.execute(
+                """UPDATE chat_turns SET result = jsonb_set(result, '{quote}', %s) WHERE turn_id = %s""",
+                (Jsonb(quote.model_dump(mode="json")), turn_id),
+            )
+            return quote
+
     def consultation_snapshot(self, chat_id: UUID, token: str, turn_id: UUID) -> dict:
         with self._connect() as db:
             self._check_access(db, chat_id, token)
@@ -334,7 +359,8 @@ class ChatStore:
             return db.execute(
                 """WITH turns AS (
                        SELECT turn_id, chat_id, updated_at, result ->> 'outcome' AS outcome,
-                              result ->> 'quote' IS NOT NULL AS has_quote
+                              result -> 'quote' ->> 'customer' IS NOT NULL AS has_quote,
+                              (result -> 'quote' ->> 'customer_saved_at')::timestamptz AS quote_finalized_at
                        FROM chat_turns WHERE status = 'succeeded'
                    ), first_requests AS (
                        SELECT DISTINCT ON (chat_id) chat_id, submitted_at FROM chat_turns
@@ -353,7 +379,7 @@ class ChatStore:
                        FROM customer_resolutions AS resolution JOIN turns AS turn USING (turn_id)
                    ), first_resolutions AS (
                        SELECT chat_id, min(resolved_at) AS resolved_at FROM (
-                           SELECT chat_id, updated_at AS resolved_at FROM turns WHERE has_quote
+                           SELECT chat_id, coalesce(quote_finalized_at, updated_at) AS resolved_at FROM turns WHERE has_quote
                            UNION ALL
                            SELECT chat_id, created_at FROM confirmations
                            UNION ALL

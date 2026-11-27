@@ -5,6 +5,8 @@ x-backend: &backend
     DATABASE_URL: postgresql://softline:softline@db:5432/softline
     CATALOG_INDEX_PATH: ${CATALOG_INDEX_PATH:-}
     COMMERCE_CATALOG_INDEX_PATH: ${COMMERCE_CATALOG_INDEX_PATH:-}
+    COMMERCE_MODEL_PROFILE: ${COMMERCE_MODEL_PROFILE:-polza}
+    COMMERCE_OLLAMA_ENDPOINT: ${COMMERCE_OLLAMA_ENDPOINT:-http://host.docker.internal:11434/api/chat}
     POLZA_EGRESS_MODE: ${POLZA_EGRESS_MODE:-disabled}
     POLZA_API_KEY: ${POLZA_API_KEY:-}
     POLZA_TASK_MODEL: ${POLZA_TASK_MODEL:-}
@@ -62,6 +64,19 @@ services:
     depends_on:
       api:
         condition: service_healthy
+
+  catalog-refresh:
+    build: .
+    profiles: ["catalog-refresh"]
+    user: ${SOFTLINE_DOCKER_USER:-app}
+    environment:
+      COMMERCE_CATALOG_INDEX_PATH: ${COMMERCE_CATALOG_INDEX_PATH:-}
+    volumes:
+      - type: bind
+        source: ${CATALOG_DIR:-./fixtures}
+        target: /catalog
+    command: ["python", "-m", "softline_backend.catalog_refresh", "--daily"]
+    restart: unless-stopped
 
 volumes:
   postgres-data:

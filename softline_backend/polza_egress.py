@@ -88,6 +88,22 @@ class FilterDecision(BaseModel):
 LocalFilter = Callable[[TurnScope], Awaitable[dict | FilterDecision]]
 
 
+def check_transport_request(request, endpoint: str, expected: dict, *, credentials: bool = True):
+    try:
+        body = json.loads(request.content)
+    except (TypeError, ValueError):
+        block("request_mismatch")
+    disallowed = {"cookie", "forwarded", "x-forwarded-for", "x-real-ip"}
+    if not credentials:
+        disallowed.add("authorization")
+    if (
+        request.method != "POST" or str(request.url) != endpoint or body != expected
+        or any(key in request.headers for key in disallowed)
+    ):
+        block("request_mismatch")
+    record("allowed", "technical_fields")
+
+
 class EgressBlocked(TemporaryReadError):
     pass
 
@@ -141,8 +157,9 @@ async def _native_filter(scope: TurnScope) -> dict:
     return await asyncio.wrap_future(work)
 
 
-def load_egress_filter() -> tuple[bool, LocalFilter | None]:
-    enabled = os.getenv("POLZA_EGRESS_MODE", "") == "real"
+def load_egress_filter(*, enabled: bool | None = None) -> tuple[bool, LocalFilter | None]:
+    if enabled is None:
+        enabled = os.getenv("POLZA_EGRESS_MODE", "") == "real"
     if not enabled:
         return False, None
     return True, _native_filter if find_spec("natasha") is not None else None

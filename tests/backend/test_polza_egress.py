@@ -76,6 +76,45 @@ class EgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("THIS MUST NOT BE SENT", json.dumps(request))
         self.assertNotIn("Прошу помочь", json.dumps(request, ensure_ascii=False))
 
+    async def test_local_qwen_has_the_same_fail_closed_input_gate(self):
+        from softline_backend.ollama_profile import LocalCatalogModel, MODEL
+
+        async def allow(_scope):
+            return TECHNICAL
+
+        def receive(request):
+            self.assertEqual(str(request.url), "http://127.0.0.1:11434/api/chat")
+            self.assertNotIn("authorization", request.headers)
+            self.requests.append(json.loads(request.content))
+            return httpx.Response(200, json={
+                "done": True, "done_reason": "stop", "message": {"content": json.dumps(MODEL_RESPONSE)},
+                "prompt_eval_count": 11, "eval_count": 3,
+            })
+
+        async def run(endpoint, scope, checker=allow):
+            model = LocalCatalogModel(endpoint, checker, transport=httpx.MockTransport(receive))
+            token = polza_scope.set(scope)
+            try:
+                return await model.complete("ignore this", json.dumps({"message": MESSAGE, "selection": None}), INDEXED_SCHEMA)
+            finally:
+                polza_scope.reset(token)
+
+        endpoint = "http://127.0.0.1:11434/api/chat"
+        result, usage = await run(endpoint, self.scope)
+        self.assertEqual(result, MODEL_RESPONSE)
+        self.assertEqual(usage.output_tokens, 3)
+        self.assertEqual(self.requests[0]["model"], MODEL)
+        self.assertEqual(self.requests[0]["messages"][1]["content"],
+                         "Нужно резервное копирование для 10 ПК с Windows 11, локально")
+        for bad_url, bad_scope, checker in (
+            ("https://external.invalid/api/chat", self.scope, allow),
+            (endpoint, TurnScope("test-turn", MESSAGE, ("Телефон +7 999 123-45-67",), None), allow),
+            (endpoint, self.scope, None),
+        ):
+            with self.assertRaises(TemporaryReadError):
+                await run(bad_url, bad_scope, checker)
+        self.assertEqual(len(self.requests), 1)
+
     async def test_key_alone_and_missing_filter_do_not_open_network(self):
         async def allow(_scope):
             return TECHNICAL

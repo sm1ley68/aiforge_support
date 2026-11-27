@@ -326,6 +326,7 @@ class ChatBackendTests(unittest.TestCase):
                 for key, text in (
                     ("available-quote", "КП на 2 упаковки, ID предложения 1001"),
                     ("unavailable-quote", "КП на 2 упаковки, ID предложения 1002"),
+                    ("missing-item", "ID предложения 999999"),
                 ):
                     response = self.submit(key, text)
                     self.assertEqual(response.status_code, 202)
@@ -341,18 +342,49 @@ class ChatBackendTests(unittest.TestCase):
             self.assertEqual(turn["quote"]["quantity"], 2)
             self.assertEqual(turn["quote"]["currency"], "RUB")
             self.assertEqual(self.client.get(quote_path + "/quote").status_code, 401)
+            self.assertEqual(self.client.get(quote_path + "/quote", headers=self.headers).status_code, 409)
+            buyer = {"company": "Тестовое ООО", "inn": "7707083893", "kpp": "770701001"}
+            self.assertEqual(self.client.put(quote_path + "/quote/customer", json=buyer).status_code, 401)
+            self.assertEqual(self.client.put(quote_path + "/quote/customer", headers=self.headers,
+                                             json={"company": buyer["company"], "inn": buyer["inn"]}).status_code, 422)
+            saved = self.client.put(quote_path + "/quote/customer", headers=self.headers, json=buyer)
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()["customer"], buyer)
+            self.assertEqual(self.client.put(quote_path + "/quote/customer", headers=self.headers, json=buyer).json(), saved.json())
+            self.assertEqual(self.client.put(quote_path + "/quote/customer", headers=self.headers, json={
+                **buyer, "company": "Другая компания",
+            }).status_code, 409)
             document = self.client.get(quote_path + "/quote", headers=self.headers)
             self.assertEqual(document.status_code, 200, document.text)
             self.assertIn("attachment", document.headers["Content-Disposition"])
             self.assertIn("246.90", document.text)
+            for value in buyer.values():
+                self.assertIn(value, document.text)
             self.assertNotIn("400.00", document.text)
             self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
             self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
             rejected = self.client.get(responses["unavailable-quote"], headers=self.headers).json()
             self.assertEqual(rejected["outcome"], "handoff")
-            self.assertIsNone(rejected["quote"])
+            self.assertEqual(rejected["quote"]["delivery_status"], "requires_confirmation")
+            self.assertEqual(rejected["quote"]["total"], "140.00")
+            missing = self.client.get(responses["missing-item"], headers=self.headers).json()
+            self.assertEqual(missing["outcome"], "handoff")
+            self.assertIsNone(missing["quote"])
+            projected = self.client.get(
+                f"/api/consultation/{self.path.split('/')[-1]}/turns/{rejected['turn_id']}",
+                headers=self.headers,
+            ).json()
+            self.assertEqual(projected["products"][0]["snapshotAt"], rejected["quote"]["catalog_snapshot_at"])
+            pending_path = responses["unavailable-quote"]
+            self.assertEqual(self.client.put(pending_path + "/quote/customer", headers=self.headers, json=buyer).status_code, 200)
+            pending_document = self.client.get(pending_path + "/quote", headers=self.headers)
+            self.assertIn("Поставка требует подтверждения", pending_document.text)
             operator = {"Authorization": "Bearer manager-secret"}
             with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
+                pending_case = manager.get(f"/manager/handoffs/{rejected['turn_id']}", headers=operator).json()
+                self.assertEqual(pending_case["reason"], "delivery_confirmation")
+                self.assertEqual(pending_case["candidate_ids"], ["1002"])
+                self.assertEqual(pending_case["requirements"]["quantity"], "2")
                 self.assertEqual(manager.post(f"/api/requests/{rejected['turn_id']}/reply", headers=operator, json={
                     "text": "Подтверждаю ранее выданное КП.", "confirmedQuoteTurnId": turn["turn_id"],
                 }).status_code, 409)
@@ -367,5 +399,5 @@ class ChatBackendTests(unittest.TestCase):
                 self.assertEqual(summary.status_code, 200, summary.text)
                 metrics = manager.get("/api/requests/metrics", headers=operator).json()
             self.assertEqual(metrics["managerConfirmedQuotes"], 1)
-            self.assertEqual(metrics["automaticQuotes"], 0)
+            self.assertEqual(metrics["automaticQuotes"], 1)
             self.assertEqual(metrics["customerConfirmedAnswers"], 0)

@@ -67,11 +67,26 @@ class CatalogReference(BaseModel):
 
 
 class HandoffDetails(BaseModel):
-    reason: Literal["customer_requested", "insufficient_evidence", "commercial_terms", "provider_unavailable"]
+    reason: Literal[
+        "customer_requested", "insufficient_evidence", "commercial_terms", "provider_unavailable", "delivery_confirmation",
+    ]
     summary: str
     requirements: dict[str, str] = Field(default_factory=dict)
     candidate_ids: list[str] = Field(default_factory=list)
     evidence: list[Source] = Field(default_factory=list)
+
+
+class QuoteCustomer(BaseModel):
+    company: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    inn: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9]{10}([0-9]{2})?$")]
+    kpp: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9]{4}[0-9A-Z]{2}[0-9]{3}$")]
+
+    @field_validator("company")
+    @classmethod
+    def reject_control_characters(cls, value: str) -> str:
+        if any(ord(character) < 32 or ord(character) == 127 for character in value):
+            raise ValueError("Company name contains a control character")
+        return value
 
 
 class QuoteSnapshot(BaseModel):
@@ -86,6 +101,9 @@ class QuoteSnapshot(BaseModel):
     catalog_snapshot_at: datetime
     issued_at: datetime
     source: Source
+    customer: QuoteCustomer | None = None
+    customer_saved_at: datetime | None = None
+    delivery_status: Literal["available", "requires_confirmation"] = "available"
 
 
 class TurnResult(BaseModel):

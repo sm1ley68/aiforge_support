@@ -13,9 +13,9 @@ from fastapi.staticfiles import StaticFiles
 
 from .advisor_api import advisor_router
 from .commerce_bridge import commerce_egress_configured
-from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, TurnAccepted, TurnView
+from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, QuoteCustomer, QuoteSnapshot, TurnAccepted, TurnView
 from .quotes import render_quote
-from .readiness import ProviderStatus, catalog_status
+from .readiness import ProviderStatus, catalog_status, commerce_snapshot_at
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
 
 
@@ -76,6 +76,7 @@ def create_app(
             "database": database,
             "catalog": catalog,
             "provider": provider_status,
+            **({"catalogSnapshotAt": commerce_snapshot_at(commerce_index)} if commerce_index is not None and catalog == "ready" else {}),
         }
 
     def require_manager(token: ChatToken):
@@ -138,6 +139,16 @@ def create_app(
             raise HTTPException(404, "Turn not found")
         return turn
 
+    @app.put("/chats/{chat_id}/turns/{turn_id}/quote/customer", response_model=QuoteSnapshot)
+    def save_quote_customer(chat_id: UUID, turn_id: UUID, body: QuoteCustomer, token: ChatToken, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            return store.save_quote_customer(chat_id, token, turn_id, body)
+        except (ChatNotFound, TurnNotFound):
+            raise HTTPException(404, "Quote not found") from None
+        except MessageConflict:
+            raise HTTPException(409, "This quote already has customer details") from None
+
     @app.get("/chats/{chat_id}/turns/{turn_id}/quote", response_class=HTMLResponse)
     def download_quote(chat_id: UUID, turn_id: UUID, token: ChatToken):
         try:
@@ -146,6 +157,8 @@ def create_app(
             raise HTTPException(404, "Quote not found") from None
         if turn is None or turn.quote is None:
             raise HTTPException(404, "Quote not found")
+        if turn.quote.customer is None:
+            raise HTTPException(409, "Add customer details before downloading the quote")
         return HTMLResponse(render_quote(turn_id, turn.quote), headers={
             "Cache-Control": "no-store",
             "Content-Disposition": f'attachment; filename="quote-{turn_id}.html"',

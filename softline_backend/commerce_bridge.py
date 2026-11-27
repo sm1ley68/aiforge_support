@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import re
@@ -24,8 +23,9 @@ from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
 from .contracts import HandoffDetails, MessageView, ProductCard, QuoteSnapshot, Source, TurnResult, VerifiedFact
 from .knowledge import validated_url
+from .ollama_profile import ENDPOINTS as OLLAMA_ENDPOINTS, PROFILE as OLLAMA_PROFILE, LocalCatalogModel
 from .polza_egress import (
-    ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, load_egress_filter, polza_scope, prepare, record,
+    ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, check_transport_request, load_egress_filter, polza_scope, prepare, record,
 )
 from .quotes import QUOTE_REQUEST
 from .store import ClaimedTurn
@@ -73,16 +73,7 @@ class CatalogModel:
 
         async def validate_request(request: httpx.Request):
             nonlocal sent
-            try:
-                body = json.loads(request.content)
-            except (TypeError, ValueError):
-                block("request_mismatch")
-            if (
-                request.method != "POST" or str(request.url) != ENDPOINT or body != expected
-                or any(key in request.headers for key in ("cookie", "forwarded", "x-forwarded-for", "x-real-ip"))
-            ):
-                block("request_mismatch")
-            record("allowed", "technical_fields")
+            check_transport_request(request, ENDPOINT, expected)
             sent = True
 
         async def record_response(response: httpx.Response):
@@ -179,9 +170,9 @@ def _requirements(context: CatalogContext | None) -> dict[str, str]:
 
 
 class CommerceBridge:
-    def __init__(self, index_path: Path, model: IntentModel):
+    def __init__(self, index_path: Path, model: IntentModel, *, model_timeout: int = 6):
         self.agent = CommerceAgent(
-            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=6
+            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=model_timeout
         )
 
     def restore_knowledge(self, publications: list[tuple[str, str, str]]) -> None:
@@ -225,17 +216,28 @@ class CommerceBridge:
                     unit_label = "уп."
                 elif unit.startswith("лицензи") and offer.user_limit in (None, 1):
                     unit_label = "лиц."
-            if card is not None and card.availability is True and card.price_amount and card.currency and unit_label:
+            if card is not None and card.availability is not None and card.price_amount and card.currency and unit_label:
                 price = card.price_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
                 quote = QuoteSnapshot(
                     offer_id=card.offer_id, sku=card.sku, title=card.title, quantity=count, unit_label=unit_label,
                     unit_price=price, total=price * count, currency=card.currency,
                     catalog_snapshot_at=card.snapshot_at, issued_at=datetime.now(timezone.utc),
                     source=Source(title=card.title, url=card.url),
+                    delivery_status="available" if card.availability else "requires_confirmation",
                 )
+                delivery_check = None
+                reply = f"Итого {quote.total:.2f} {quote.currency}. Заполните реквизиты заказчика для скачивания КП."
+                if not card.availability:
+                    delivery_check = HandoffDetails(
+                        reason="delivery_confirmation", summary="Подтвердить фактическую поставку",
+                        requirements={"quantity": str(count), "Единица": unit_label, "Позиция": card.title},
+                        candidate_ids=[card.offer_id], evidence=[quote.source],
+                    )
+                    reply += " Поставка требует подтверждения. Передал менеджеру позицию и количество."
                 return TurnResult(
-                    outcome="answer", text=f"КП готово. Итого {quote.total:.2f} {quote.currency}.",
-                    products=[card], sources=[quote.source], quote=quote, commerce_state=persisted_state,
+                    outcome="handoff" if delivery_check else "answer", text=reply,
+                    products=[card], sources=[quote.source], quote=quote, handoff=delivery_check,
+                    commerce_state=persisted_state,
                 )
         return TurnResult(
             outcome="handoff", text="Передал запрос менеджеру для проверки цены, наличия или единицы лицензирования.",
@@ -255,6 +257,15 @@ class CommerceBridge:
         if match := QUOTE_REQUEST.fullmatch(text.strip()):
             return self.quote(match, state.catalog_context, persisted_state)
         direct_id = OFFER_ID.fullmatch(text.strip())
+        if direct_id and not any(offer.offer_id == direct_id[1] for offer in self.agent.catalog_index.by_reference(direct_id[1])):
+            return TurnResult(
+                outcome="handoff", text="Позиции с таким ID в каталоге нет. Передал запрос нашему менеджеру.",
+                commerce_state=persisted_state,
+                handoff=HandoffDetails(
+                    reason="insufficient_evidence", summary="Найти отсутствующую в каталоге позицию",
+                    requirements={"ID предложения": direct_id[1]},
+                ),
+            )
         query = direct_id[1] if direct_id else text
         scope = TurnScope(str(turn.turn_id), text, tuple(message.text for message in history), persisted_state)
         token = polza_scope.set(scope)
@@ -313,17 +324,35 @@ class CommerceBridge:
         )
 
 
+def _profile_from_env() -> str:
+    return os.getenv("COMMERCE_MODEL_PROFILE", "").strip() or "polza"
+
+
+def _ollama_url() -> str:
+    return os.getenv("COMMERCE_OLLAMA_ENDPOINT", "").strip() or "http://127.0.0.1:11434/api/chat"
+
+
 def commerce_from_env() -> CommerceBridge | None:
     path = os.getenv("COMMERCE_CATALOG_INDEX_PATH", "").strip()
     if not path:
         return None
+    profile = _profile_from_env()
+    if profile == OLLAMA_PROFILE:
+        _, checker = load_egress_filter(enabled=True)
+        return CommerceBridge(Path(path), LocalCatalogModel(_ollama_url(), checker), model_timeout=40)
     key = commerce_provider_key()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     enabled, checker = load_egress_filter()
-    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled, checker=checker))
+    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled and profile == "polza", checker=checker))
 
 
 def commerce_egress_configured() -> bool:
+    profile = _profile_from_env()
+    if profile == OLLAMA_PROFILE:
+        _, checker = load_egress_filter(enabled=True)
+        return checker is not None and _ollama_url() in OLLAMA_ENDPOINTS
+    if profile != "polza":
+        return False
     enabled, checker = load_egress_filter()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     endpoint = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"

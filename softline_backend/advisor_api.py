@@ -22,6 +22,7 @@ OPERATOR_COOKIE = "softline_operator_session"
 OPERATOR_TTL = 3600
 TURN_WAIT = 12
 REQUIREMENT_LABELS = {
+    "Позиция": "Позиция", "quantity": "Количество", "Единица": "Единица", "ID предложения": "ID предложения",
     "Спорный факт": "Спорный факт",
     "Что проверить": "Что проверить",
     "product": "Продукт", "edition": "Редакция", "users": "Пользователи", "nodes": "Узлы",
@@ -34,6 +35,7 @@ ISSUES = {
     "customer_requested": "Попросили менеджера",
     "insufficient_evidence": "Недостаточно подтверждений",
     "commercial_terms": "Коммерческие условия",
+    "delivery_confirmation": "Подтвердить поставку",
     "provider_unavailable": "Обработка требует проверки",
 }
 OUTCOMES = {
@@ -162,7 +164,7 @@ def _product(card: dict, recommended: bool) -> dict:
             details.append(f"{label} — {facts[key]}.")
     product = {
         "id": card["offer_id"], "name": card["title"], "summary": card["match_summary"],
-        "url": card["url"], "recommended": recommended,
+        "url": card["url"], "recommended": recommended, "snapshotAt": card["snapshot_at"],
     }
     if "edition" in facts:
         product["version"] = facts["edition"]
@@ -285,7 +287,9 @@ def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
         response.headers.update(headers)
         view = _present(snapshot, str(chat_id))
         if "quote" in view:
-            view["quote"]["downloadUrl"] = f"/chats/{chat_id}/turns/{turn_id}/quote"
+            quote_url = f"/chats/{chat_id}/turns/{turn_id}/quote"
+            view["quote"]["downloadUrl"] = quote_url
+            view["quote"]["customerUrl"] = f"{quote_url}/customer"
         return view
 
     @router.post("/operator/session")

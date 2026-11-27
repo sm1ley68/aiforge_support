@@ -33,3 +33,12 @@ def catalog_status(index: Path | None, *, commerce: bool = False) -> CatalogStat
     except (OSError, sqlite3.Error):
         return "unavailable"
     return "ready"
+
+
+def commerce_snapshot_at(index: Path) -> str | None:
+    try:
+        with closing(sqlite3.connect(f"{index.absolute().as_uri()}?mode=ro", uri=True, timeout=1)) as db:
+            row = db.execute("SELECT snapshot_at FROM catalog_meta LIMIT 1").fetchone()
+            return row[0] if row else None
+    except (OSError, sqlite3.Error):
+        return None
