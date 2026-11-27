@@ -27,6 +27,7 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
   const reduceMotion = useReducedMotion();
   const { id, title, customer, issue, response } = request;
   const answer = response.messages.findLast(message => message.role === 'assistant');
+  const customerReply = request.needsReply ? response.messages.findLast(message => message.role === 'user') : undefined;
 
   useEffect(() => {
     if (isPresent) card.current?.focus({ preventScroll: true });
@@ -86,7 +87,12 @@ export function RequestPreview({ request, href, position, total, onPrevious, onN
           <h2 id="request-preview-title">{title}</h2>
           <p>{customer}</p>
         </div>
-        {issue && (
+        {customerReply ? (
+          <section className="preview-issue">
+            <h3>Клиент ответил</h3>
+            <p>{customerReply.content}</p>
+          </section>
+        ) : issue && (
           <section className="preview-issue">
             <h3>{issue.label}</h3>
             <p>{issue.detail}</p>

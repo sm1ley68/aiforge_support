@@ -15,6 +15,7 @@ export type Product = {
   id: string;
   name: string;
   version?: string;
+  snapshotAt?: string;
   summary: string;
   detail?: string;
   features?: string[];

@@ -2,13 +2,12 @@ import { useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AppIcon } from './AppIcon';
 import { statuses } from './QueueAnalytics';
-import { RequestChat } from './RequestChat';
+import { LiveManagerCase } from './LiveManagerCase';
 import { RequestContext, RequestTabContent } from './RequestInspector';
 import type { InspectorTab } from './RequestInspector';
 import { RequestMessages } from './RequestMessages';
 import { RequestOverview } from './RequestOverview';
-import type { OperatorRequest, OperatorStatus } from './operator-types';
-import { useRequestChat } from './use-request-chat';
+import type { OperatorRequest } from './operator-types';
 
 const detailTabs = [
   { id: 'dialog', label: 'Диалог', icon: 'journal' },
@@ -88,17 +87,17 @@ export function RequestThread({ request, revealInspector }: { request?: Operator
   );
 }
 
-export function SelectedRequest({ request, reviewQueue, requestHref, changeStatus }: {
+export function SelectedRequest({ request, reviewQueue, requestHref, reload }: {
   request: OperatorRequest;
   reviewQueue: OperatorRequest[];
   requestHref: (id: string) => string;
-  changeStatus?: (status: OperatorStatus) => Promise<unknown>;
+  reload: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>('dialog');
   const [startingOrder] = useState(() => reviewQueue.map(item => item.id));
   const tabGroup = useRef<HTMLDivElement>(null);
-  const chat = useRequestChat(request);
   const { response } = request;
+  const showTrace = response.trace.length > 0;
   const available = new Set(reviewQueue.map(item => item.id));
   available.delete(request.id);
   const nextId = startingOrder.slice(startingOrder.indexOf(request.id) + 1).find(id => available.has(id))
@@ -123,10 +122,10 @@ export function SelectedRequest({ request, reviewQueue, requestHref, changeStatu
       </div>
       {tab === 'dialog' ? (
         <div className="request-dialog-view operator-detail-tab" key="dialog">
-          <RequestOverview request={request} onProducts={openProducts} />
-          <div className={`request-conversation${response.trace.length ? ' request-conversation--with-trace' : ''}`}>
-            <RequestChat request={request} chat={chat} nextHref={nextId && requestHref(nextId)} changeStatus={changeStatus} />
-            {response.trace.length > 0 && (
+          <RequestOverview request={request} onProducts={openProducts} live />
+          <div className={`request-conversation${showTrace ? ' request-conversation--with-trace' : ''}`}>
+            <LiveManagerCase request={request} nextHref={nextId && requestHref(nextId)} reload={reload} />
+            {showTrace && (
               <aside className="detail-context" aria-label="Ход работы агента">
                 <RequestContext response={response} showConditions={false} />
               </aside>

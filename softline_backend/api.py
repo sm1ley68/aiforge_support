@@ -3,11 +3,13 @@ import os
 from pathlib import Path
 from secrets import compare_digest
 from time import perf_counter
+import re
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, StringConstraints
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
@@ -32,6 +34,10 @@ def chat_token(auth: Annotated[HTTPAuthorizationCredentials | None, Depends(bear
 
 
 ChatToken = Annotated[str, Depends(chat_token)]
+
+
+class SupportContact(BaseModel):
+    email: Annotated[str, StringConstraints(strip_whitespace=True, max_length=254, min_length=3)]
 
 
 def create_app(
@@ -117,6 +123,38 @@ def create_app(
             raise HTTPException(409, "Message ID was already used with different text") from None
         logger.info("turn_submission_accepted turn_id=%s duration_ms=%.1f", turn_id, (perf_counter() - started) * 1000)
         return TurnAccepted(turn_id=turn_id)
+
+    @app.post("/chats/{chat_id}/manager-messages", response_model=TurnAccepted, status_code=202)
+    def forward_message(chat_id: UUID, body: MessageInput, token: ChatToken):
+        try:
+            turn_id = store.submit(chat_id, token, body.client_message_id, body.text, to_manager=True)
+        except ChatNotFound:
+            raise HTTPException(404, "Chat not found") from None
+        except MessageConflict:
+            raise HTTPException(409, "Manager case is closed or message ID conflicts") from None
+        return TurnAccepted(turn_id=turn_id)
+
+    def support_view(chat_id: UUID, token: str, response: Response, email: str | None = None):
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            state = store.handoff_status(chat_id, token, email=email)
+        except (ChatNotFound, TurnNotFound):
+            raise HTTPException(404, "Manager case not found") from None
+        support = hours.status()
+        support.pop("email", None)
+        if state["has_contact"] and hours.email:
+            support["email"] = hours.email
+        return {"status": state["status"], "hasContact": state["has_contact"], "support": support}
+
+    @app.get("/chats/{chat_id}/support")
+    def get_chat_support(chat_id: UUID, token: ChatToken, response: Response):
+        return support_view(chat_id, token, response)
+
+    @app.put("/chats/{chat_id}/support/contact")
+    def save_chat_contact(chat_id: UUID, body: SupportContact, token: ChatToken, response: Response):
+        if not re.fullmatch(r"[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", body.email):
+            raise HTTPException(422, "Invalid email address")
+        return support_view(chat_id, token, response, email=body.email)
 
     @app.post("/chats/{chat_id}/turns/{turn_id}/retry", response_model=TurnAccepted, status_code=202)
     def retry_turn(chat_id: UUID, turn_id: UUID, token: ChatToken):

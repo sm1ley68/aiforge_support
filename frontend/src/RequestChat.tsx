@@ -95,7 +95,7 @@ export function RequestChat({ request, chat, nextHref, changeStatus }: {
       <header className="request-chat-control">
         <div>
           <AppIcon name={taken ? 'support' : 'agent'} size={17} />
-          <span>{taken ? 'Вы ведёте диалог' : 'Агент Store ведёт диалог'}{chat.demo && <small>Деморежим</small>}</span>
+          <span>{closed ? 'Диалог закрыт' : taken ? 'Вы ведёте диалог' : 'Агент Store ведёт диалог'}</span>
         </div>
         {!taken && !closed && (
           <button type="button" className="chat-take-over" disabled={!ready || busy} onClick={beginReply}>
@@ -194,7 +194,7 @@ export function RequestChat({ request, chat, nextHref, changeStatus }: {
           {storageWarning && <p className="chat-storage-warning" role="status">{storageWarning}</p>}
         </form>
       )}
-      <div className="request-workflow" aria-label="Действия с запросом">
+      <div className="request-workflow" role="group" aria-label="Действия с запросом">
         {request.needsReply && (
           <button className="request-reply-action" disabled={!ready || busy} type="button" onClick={beginReply}>Ответить</button>
         )}

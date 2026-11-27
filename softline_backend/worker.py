@@ -98,6 +98,7 @@ def process_one(
                 if article is not None:
                     result = TurnResult(
                         outcome="answer", text=article["answer"], commerce_state=result.commerce_state,
+                        from_manager_knowledge=True,
                         catalog_selection=reference if article.get("sku") else None,
                         sources=[Source(title=article["question"], url=article["sourceUrl"])],
                     )

@@ -86,13 +86,13 @@ Worker сохраняет внутреннее состояние CommerceAgent 
 Соберите фронтенд с относительными адресами API и подайте сборку на тот же адрес, что и backend.
 
 ~~~sh
-(cd frontend && npm ci && VITE_AGENT_API_URL=/api/consultation VITE_AGENT_REQUESTS_URL=/api/requests npm run build)
+(cd frontend && npm ci && npm run build)
 export STORE_ADVISOR_DIST_PATH="$PWD/frontend/dist"
 ~~~
 
-Для Compose используйте `STORE_ADVISOR_DIST_DIR="$PWD/frontend/dist"` и `STORE_ADVISOR_DIST_PATH=/advisor-dist`. Войдите с токеном менеджера на `/manager` и откройте `/advisor` в том же браузере. Вход создаёт HttpOnly-сессию для журнала. Журнал также принимает Bearer-токен оператора. Для Vite dev server проксируйте `/api/`, `/manager` и `/demo/` на тестовый backend или используйте собранный `/advisor` на адресе backend.
+Для Compose используйте `STORE_ADVISOR_DIST_DIR="$PWD/frontend/dist"` и `STORE_ADVISOR_DIST_PATH=/advisor-dist`. Клиентский чат открывается на `/advisor?view=chat`, кабинет менеджера — на `/advisor`. Вход с серверным `MANAGER_TOKEN` создаёт HttpOnly-сессию для журнала. Vite проксирует `/api` и `/chats` на локальный API. [Запуск фронтенда и сценарии приёмки](frontend/README.md)
 
-`POST /api/consultation` использует существующую очередь worker. Сохраните полученный `conversationId` как непрозрачное значение. Передавайте стабильный `clientMessageId` при повторе отправки в уже открытом чате. История и условия берутся из PostgreSQL, `scenario` и `catalogProductId` пока остаются подсказками клиента. `GET /api/requests` возвращает последнее состояние недавних чатов и требует операторской авторизации.
+Клиентский чат использует `POST /chats` и `POST /chats/{chat_id}/messages`. Он сохраняет идентификатор сообщения перед отправкой и перечитывает ход и переписку с сервера. Кабинет загружает журнал из `GET /api/requests`. Статусы, сообщения и общие решения хранятся в PostgreSQL.
 
 ### Запуск демо
 

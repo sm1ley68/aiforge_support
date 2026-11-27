@@ -1,0 +1,4 @@
+<yml_catalog date="2026-11-27 13:00"><shop><offers>
+<offer id="1001" available="true"><name>Тестовая лицензия</name><vendorCode>TEST1</vendorCode><url>https://store.softline.ru/test/1001/</url><price>123.45</price><currencyId>RUR</currencyId></offer>
+<offer id="1002" available="false"><name>Недоступная лицензия</name><vendorCode>TEST2</vendorCode><url>https://store.softline.ru/test/1002/</url><price>70</price><currencyId>RUR</currencyId></offer>
+</offers></shop></yml_catalog>

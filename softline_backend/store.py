@@ -93,6 +93,9 @@ class ChatStore:
                 db.execute("SELECT confirmed_quote_id FROM manager_replies LIMIT 0")
                 db.execute("SELECT turn_id FROM customer_resolutions LIMIT 0")
                 db.execute("SELECT handoff_id FROM manager_knowledge LIMIT 0")
+                db.execute("SELECT handoff_id FROM operator_handoff_workflow LIMIT 0")
+                db.execute("SELECT chat_id FROM chat_contacts LIMIT 0")
+                db.execute("SELECT reply_id FROM manager_followup_replies LIMIT 0")
         except Error:
             return False
         return True
@@ -118,7 +121,7 @@ class ChatStore:
         if db.execute(query, (chat_id, sha256(token.encode()).digest())).fetchone() is None:
             raise ChatNotFound
 
-    def submit(self, chat_id: UUID, token: str, client_message_id: str, text: str) -> UUID:
+    def submit(self, chat_id: UUID, token: str, client_message_id: str, text: str, *, to_manager: bool = False) -> UUID:
         with self._connect() as db:
             db.isolation_level = IsolationLevel.READ_COMMITTED
             self._check_access(db, chat_id, token, lock=True)
@@ -133,6 +136,19 @@ class ChatStore:
                 return existing["turn_id"]
 
             turn_id = uuid4()
+            if to_manager:
+                handoff = self._active_handoff(db, chat_id)
+                if handoff is None or handoff["status"] == "resolved":
+                    raise MessageConflict
+                db.execute(
+                    """INSERT INTO chat_turns (turn_id, chat_id, client_message_id, message_text, submitted_at, status, result)
+                       VALUES (%s, %s, %s, %s, clock_timestamp(), 'succeeded', %s)""",
+                    (turn_id, chat_id, client_message_id, text,
+                     Jsonb(TurnResult(outcome="answer", text="").model_dump(mode="json"))),
+                )
+                if handoff["status"] == "waiting":
+                    self._write_workflow(db, handoff["handoff_id"], "review", handoff["seen_sequence"])
+                return turn_id
             db.execute(
                 """INSERT INTO chat_turns (turn_id, chat_id, client_message_id, message_text, submitted_at)
                    VALUES (%s, %s, %s, %s, clock_timestamp())""",
@@ -233,7 +249,10 @@ class ChatStore:
                    )
                    SELECT recent.*, saved.turn_id AS handoff_id, saved.result AS handoff_result,
                           saved.sequence AS handoff_sequence, reply.created_at AS manager_replied_at,
-                          resolution.created_at AS customer_resolved_at
+                          resolution.created_at AS customer_resolved_at,
+                          contact.email AS contact_email, knowledge.created_at AS article_published_at,
+                          workflow.status AS workflow_status, workflow.updated_at AS workflow_updated_at,
+                          recent.sequence > coalesce(workflow.seen_sequence, saved.sequence) AS needs_reply
                    FROM recent
                    LEFT JOIN LATERAL (
                        SELECT turn_id, sequence, result FROM chat_turns
@@ -242,6 +261,9 @@ class ChatStore:
                    ) AS saved ON true
                    LEFT JOIN manager_replies AS reply ON reply.handoff_id = saved.turn_id
                    LEFT JOIN customer_resolutions AS resolution ON resolution.turn_id = recent.turn_id
+                   LEFT JOIN chat_contacts AS contact ON contact.chat_id = recent.chat_id
+                   LEFT JOIN operator_handoff_workflow AS workflow ON workflow.handoff_id = saved.turn_id
+                   LEFT JOIN manager_knowledge AS knowledge ON knowledge.handoff_id = saved.turn_id
                    ORDER BY recent.sequence DESC""",
                 (limit,),
             ).fetchall()
@@ -274,21 +296,115 @@ class ChatStore:
                 return None
             return HandoffCase(**row.pop("details"), **row, messages=self._history(db, row["chat_id"]))
 
-    def reply_to_handoff(self, handoff_id: UUID, text: str, quote_id: UUID | None) -> dict:
+    @staticmethod
+    def _active_handoff(db, chat_id: UUID) -> dict | None:
+        return db.execute(
+            """SELECT turn.turn_id AS handoff_id,
+                       coalesce(workflow.status, CASE WHEN reply.handoff_id IS NULL THEN 'review' ELSE 'resolved' END) AS status,
+                       coalesce(workflow.seen_sequence, turn.sequence) AS seen_sequence,
+                       contact.email IS NOT NULL AS has_contact
+                FROM chat_turns AS turn
+                LEFT JOIN manager_replies AS reply ON reply.handoff_id = turn.turn_id
+                LEFT JOIN operator_handoff_workflow AS workflow ON workflow.handoff_id = turn.turn_id
+                LEFT JOIN chat_contacts AS contact ON contact.chat_id = turn.chat_id
+                WHERE turn.chat_id = %s AND turn.status = 'succeeded' AND turn.result ->> 'outcome' = 'handoff'
+                ORDER BY turn.sequence DESC LIMIT 1""",
+            (chat_id,),
+        ).fetchone()
+
+    def handoff_status(self, chat_id: UUID, token: str, email: str | None = None) -> dict:
+        with self._connect() as db:
+            self._check_access(db, chat_id, token, lock=email is not None)
+            state = self._active_handoff(db, chat_id)
+            if state is None:
+                raise TurnNotFound
+            if email is not None:
+                db.execute(
+                    """INSERT INTO chat_contacts (chat_id, email) VALUES (%s, %s)
+                       ON CONFLICT (chat_id) DO UPDATE SET email = excluded.email""",
+                    (chat_id, email),
+                )
+                state["has_contact"] = True
+            return state
+
+    @staticmethod
+    def _write_workflow(db, handoff_id: UUID, status: str, sequence: int):
+        db.execute(
+            """INSERT INTO operator_handoff_workflow (handoff_id, status, seen_sequence) VALUES (%s, %s, %s)
+               ON CONFLICT (handoff_id) DO UPDATE SET status = excluded.status,
+               seen_sequence = excluded.seen_sequence, updated_at = clock_timestamp()""",
+            (handoff_id, status, sequence),
+        )
+
+    def change_handoff_status(self, handoff_id: UUID, status: str, seen_turn_id: UUID):
+        with self._connect() as db:
+            case = db.execute(HANDOFF_ROWS + " AND turn_id = %s", (handoff_id,)).fetchone()
+            if case is None:
+                raise TurnNotFound
+            db.execute("SELECT chat_id FROM chats WHERE chat_id = %s FOR UPDATE", (case["chat_id"],))
+            active = self._active_handoff(db, case["chat_id"])
+            latest = db.execute(
+                "SELECT turn_id, sequence FROM chat_turns WHERE chat_id = %s ORDER BY sequence DESC LIMIT 1",
+                (case["chat_id"],),
+            ).fetchone()
+            if active["handoff_id"] != handoff_id or latest["turn_id"] != seen_turn_id:
+                raise MessageConflict
+            self._write_workflow(db, handoff_id, status, latest["sequence"])
+
+    def reply_to_handoff(
+        self, handoff_id: UUID, text: str, quote_id: UUID | None,
+        client_message_id: str | None = None, next_status: str = "resolved", seen_turn_id: UUID | None = None,
+    ) -> dict:
         with self._connect() as db:
             case = db.execute(HANDOFF_ROWS + " AND turn_id = %s", (handoff_id,)).fetchone()
             if case is None:
                 raise TurnNotFound
             db.execute("SELECT chat_id FROM chats WHERE chat_id = %s FOR UPDATE", (case["chat_id"],))
             existing = db.execute(
-                """SELECT handoff_id, text, created_at, confirmed_quote_id
+                """SELECT handoff_id, text, created_at, confirmed_quote_id, client_message_id
                    FROM manager_replies WHERE handoff_id = %s""",
                 (handoff_id,),
             ).fetchone()
-            if existing is not None:
+            if client_message_id is not None:
+                followup = db.execute(
+                    """SELECT handoff_id, text, created_at, NULL AS confirmed_quote_id FROM manager_followup_replies
+                       WHERE handoff_id = %s AND client_message_id = %s""",
+                    (handoff_id, client_message_id),
+                ).fetchone()
+                if followup is not None:
+                    if followup["text"] != text:
+                        raise MessageConflict
+                    return followup
+            elif existing is not None:
                 if existing["text"] != text or existing["confirmed_quote_id"] != quote_id:
                     raise MessageConflict
-                return existing
+                return {key: value for key, value in existing.items() if key != "client_message_id"}
+
+            latest = db.execute(
+                "SELECT turn_id, sequence FROM chat_turns WHERE chat_id = %s ORDER BY sequence DESC LIMIT 1",
+                (case["chat_id"],),
+            ).fetchone()
+            active = self._active_handoff(db, case["chat_id"])
+            if client_message_id is not None:
+                if existing and existing["client_message_id"] == client_message_id:
+                    if existing["text"] != text or existing["confirmed_quote_id"] != quote_id:
+                        raise MessageConflict
+                    return {key: value for key, value in existing.items() if key != "client_message_id"}
+                if (active["handoff_id"] != handoff_id or active["status"] != "review"
+                        or latest["turn_id"] != seen_turn_id):
+                    raise MessageConflict
+                if existing is not None:
+                    if quote_id is not None:
+                        raise MessageConflict
+                    row = db.execute(
+                        """INSERT INTO manager_followup_replies
+                           (reply_id, handoff_id, client_message_id, after_sequence, text)
+                           VALUES (%s, %s, %s, %s, %s)
+                           RETURNING handoff_id, text, created_at, NULL AS confirmed_quote_id""",
+                        (uuid4(), handoff_id, client_message_id, latest["sequence"], text),
+                    ).fetchone()
+                    self._write_workflow(db, handoff_id, next_status, latest["sequence"])
+                    return row
             if quote_id is not None:
                 quote = db.execute(
                     """SELECT result -> 'quote' ->> 'offer_id' AS offer_id FROM chat_turns AS quote
@@ -300,12 +416,15 @@ class ChatStore:
                 candidates = case["details"].get("candidate_ids", [])
                 if not quote or not quote["offer_id"] or (candidates and quote["offer_id"] not in candidates):
                     raise MessageConflict
-            return db.execute(
-                """INSERT INTO manager_replies (handoff_id, after_sequence, text, confirmed_quote_id)
-                   SELECT %s, max(sequence), %s, %s FROM chat_turns WHERE chat_id = %s
+            row = db.execute(
+                """INSERT INTO manager_replies (handoff_id, after_sequence, text, confirmed_quote_id, client_message_id)
+                   VALUES (%s, %s, %s, %s, %s)
                    RETURNING handoff_id, text, created_at, confirmed_quote_id""",
-                (handoff_id, text, quote_id, case["chat_id"]),
+                (handoff_id, latest["sequence"], text, quote_id, client_message_id),
             ).fetchone()
+            if client_message_id is not None:
+                self._write_workflow(db, handoff_id, next_status, latest["sequence"])
+            return row
 
     def publish_manager_knowledge(self, handoff_id: UUID, article: dict, search_keys: list[str]) -> dict:
         with self._connect() as db:
@@ -370,7 +489,7 @@ class ChatStore:
                        SELECT turn_id, chat_id, updated_at, result ->> 'outcome' AS outcome,
                               result -> 'quote' ->> 'customer' IS NOT NULL AS has_quote,
                               (result -> 'quote' ->> 'customer_saved_at')::timestamptz AS quote_finalized_at
-                       FROM chat_turns WHERE status = 'succeeded'
+                       FROM chat_turns WHERE status = 'succeeded' AND result ->> 'text' <> ''
                    ), first_requests AS (
                        SELECT DISTINCT ON (chat_id) chat_id, submitted_at FROM chat_turns
                        ORDER BY chat_id, sequence
@@ -446,10 +565,16 @@ class ChatStore:
 
     @staticmethod
     def _history(db, chat_id: UUID, before: int | None = None) -> list[MessageView]:
-        query = """SELECT turn.turn_id, turn.message_text, turn.result,
-                          coalesce((SELECT jsonb_agg(jsonb_build_object('id', reply.handoff_id, 'text', reply.text)
-                                                   ORDER BY reply.created_at, reply.handoff_id)
-                                    FROM manager_replies AS reply WHERE reply.after_sequence = turn.sequence),
+        query = """SELECT turn.turn_id, turn.message_text, turn.result, turn.client_message_id,
+                          coalesce((SELECT jsonb_agg(jsonb_build_object('id', reply.id, 'text', reply.text)
+                                                   ORDER BY reply.created_at, reply.id)
+                                    FROM (
+                                        SELECT handoff_id AS id, text, created_at FROM manager_replies
+                                        WHERE after_sequence = turn.sequence
+                                        UNION ALL
+                                        SELECT reply_id, text, created_at FROM manager_followup_replies
+                                        WHERE after_sequence = turn.sequence
+                                    ) AS reply),
                                    '[]'::jsonb) AS replies
                    FROM chat_turns AS turn WHERE chat_id = %s"""
         params = [chat_id]
@@ -460,8 +585,11 @@ class ChatStore:
         messages = []
         for row in db.execute(query + " ORDER BY sequence", params):
             turn_id = row["turn_id"]
-            messages.append(MessageView(turn_id=turn_id, role="user", text=row["message_text"]))
-            if result := row["result"]:
+            messages.append(MessageView(
+                turn_id=turn_id, role="user", text=row["message_text"],
+                client_message_id=row["client_message_id"] if before is None else None,
+            ))
+            if (result := row["result"]) and result["text"]:
                 references = []
                 if before is not None:
                     selection = result.get("catalog_selection")

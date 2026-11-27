@@ -117,6 +117,7 @@ class TurnResult(BaseModel):
     catalog_selection: CatalogReference | None = None
     commerce_state: dict[str, JsonValue] | None = None
     quote: QuoteSnapshot | None = None
+    from_manager_knowledge: bool = False
     knowledge_update: KnowledgeUpdate | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
@@ -135,6 +136,7 @@ class TurnView(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     quote: QuoteSnapshot | None = None
     support: dict[str, JsonValue] | None = None
+    from_manager_knowledge: bool = False
     error: str | None = None
 
 
@@ -143,6 +145,7 @@ class MessageView(BaseModel):
     role: Literal["user", "assistant"]
     text: str
     author: Literal["manager"] | None = None
+    client_message_id: str | None = None
     catalog_references: list[CatalogReference] = Field(default_factory=list, exclude=True)
 
 

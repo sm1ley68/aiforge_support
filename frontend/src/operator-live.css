@@ -1,0 +1,84 @@
+.operator-login-page { display: grid; place-items: center; min-height: 100dvh; padding: 20px; }
+.operator-login { display: grid; gap: 18px; width: min(100%, 410px); padding: 26px; border-radius: 18px; background: #1d3f58; color: #f0f5fb; box-shadow: 0 20px 64px #0c24374a; }
+.operator-login h1 { font-size: clamp(25px, 4vw, 34px); line-height: 1.08; }
+.operator-login > a { display: inline-flex; width: fit-content; align-items: center; gap: 6px; color: inherit; font-size: 14px; }
+.operator-live-form { display: grid; gap: 12px; min-width: 0; }
+.operator-live-form label { display: grid; gap: 5px; min-width: 0; font-size: 13px; font-weight: 650; }
+.operator-live-form :is(input:not([type="checkbox"]), select, textarea) { box-sizing: border-box; width: 100%; min-height: 40px; border: 1px solid #b5d1e34d; border-radius: 8px; background: #122d40; color: #f0f5fb; padding: 8px 10px; font: inherit; font-weight: 450; }
+.operator-live-form textarea { resize: vertical; }
+.operator-live-form textarea::placeholder { color: #c2d3df; }
+.operator-live-primary { justify-self: start; display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 7px 14px; border-radius: 8px; background: #e4eff7; color: #132d40; font: inherit; font-size: 13px; font-weight: 710; }
+.operator-live-primary:disabled { opacity: .55; }
+.live-manager-case { display: grid; gap: 14px; min-width: 0; }
+
+.live-manager-case .request-chat-control a {
+  color: inherit;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  text-underline-offset: 3px;
+}
+.live-manager-case .chat-compose-row--text-only { grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px; }
+.live-manager-case .chat-compose-row--text-only textarea { padding-inline-start: 8px; }
+.live-manager-case .request-workflow {
+  gap: 8px 14px;
+  padding-inline: clamp(10px, 1.5vw, 15px);
+}
+.live-manager-case .operator-current-status {
+  --status-dot: #ffce9f;
+  position: relative;
+}
+.live-manager-case .operator-current-status[data-status="waiting"] { --status-dot: #b9d8f4; }
+.live-manager-case .operator-current-status[data-status="resolved"] { --status-dot: #a8dac5; }
+.live-manager-case .operator-current-status::before {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-dot);
+  transform: translateY(-50%);
+  pointer-events: none;
+  content: "";
+}
+.live-manager-case .operator-current-status select { padding-inline-start: 21px; }
+.live-manager-case .operator-reply-after {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--chat-muted);
+}
+.live-manager-case .operator-reply-after select { min-width: 0; max-width: 100%; font-weight: 550; }
+
+@container (max-width: 440px) {
+  .live-manager-case .operator-reply-after { flex-basis: 100%; }
+}
+
+.operator-knowledge { padding: 16px 19px; border-radius: 16px; background: #1d3f58e6; color: #edf4fa; }
+.operator-knowledge summary, .operator-knowledge > p { display: flex; align-items: center; gap: 8px; font-weight: 680; }
+.operator-knowledge summary { justify-content: space-between; cursor: pointer; }
+.operator-knowledge summary::marker { content: ''; }
+.operator-knowledge details[open] summary svg { transform: rotate(90deg); }
+.operator-article-form { margin-top: 14px; }
+.operator-article-form > p { font-size: 13px; color: #d3e2ec; line-height: 1.5; }
+.operator-article-form .operator-article-check { display: flex; align-items: center; }
+.operator-article-check input { accent-color: #daeefb; }
+.request-fit-reason {
+  display: grid;
+  gap: 4px;
+  justify-items: start;
+  font-size: 13px;
+}
+.request-fit-reason:has(+ .request-fit-rows) { margin-block-end: 10px; }
+.request-fit-reason span, .request-fit-reason p { color: var(--glass-muted); }
+.request-fit-reason span { font-size: 12px; }
+.request-fit--live .request-fit-status[data-status="review"] {
+  --wave-base: #f43a4c;
+  --wave-middle: #ff8a79;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .request-fit--live .request-fit-wave::before { transition: background-color .5s ease; }
+}

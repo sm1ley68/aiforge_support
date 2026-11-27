@@ -66,3 +66,29 @@ CREATE TABLE IF NOT EXISTS customer_resolutions (
     turn_id uuid PRIMARY KEY REFERENCES chat_turns (turn_id),
     created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
+
+CREATE TABLE IF NOT EXISTS chat_contacts (
+    chat_id uuid PRIMARY KEY REFERENCES chats (chat_id),
+    email text NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operator_handoff_workflow (
+    handoff_id uuid PRIMARY KEY REFERENCES chat_turns (turn_id),
+    status text NOT NULL CHECK (status IN ('review', 'waiting', 'resolved')),
+    seen_sequence bigint NOT NULL REFERENCES chat_turns (sequence),
+    updated_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE TABLE IF NOT EXISTS manager_followup_replies (
+    reply_id uuid PRIMARY KEY,
+    handoff_id uuid NOT NULL REFERENCES manager_replies (handoff_id),
+    client_message_id text NOT NULL,
+    after_sequence bigint NOT NULL REFERENCES chat_turns (sequence),
+    text text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    UNIQUE (handoff_id, client_message_id)
+);
+
+CREATE INDEX IF NOT EXISTS manager_followups_after_sequence ON manager_followup_replies (after_sequence);
+
+ALTER TABLE manager_replies ADD COLUMN IF NOT EXISTS client_message_id text;

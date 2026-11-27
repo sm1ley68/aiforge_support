@@ -78,6 +78,9 @@ ReplyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 class ManagerReplyInput(BaseModel):
     text: ReplyText
     confirmed_quote_turn_id: UUID | None = Field(default=None, alias="confirmedQuoteTurnId")
+    client_message_id: UUID | None = Field(default=None, alias="clientMessageId")
+    next_status: Literal["waiting", "resolved"] = Field(default="resolved", alias="nextStatus")
+    seen_turn_id: UUID | None = Field(default=None, alias="seenTurnId")
 
     @field_validator("text")
     @classmethod
@@ -85,6 +88,11 @@ class ManagerReplyInput(BaseModel):
         if "\x00" in value:
             raise ValueError("Null characters are not allowed")
         return value
+
+
+class ManagerStatusInput(BaseModel):
+    status: Literal["review", "waiting", "resolved"]
+    seen_turn_id: UUID = Field(alias="seenTurnId")
 
 
 class ManagerArticleInput(BaseModel):
@@ -208,7 +216,9 @@ def _operator_request(row: dict) -> dict:
         issue = {"label": ISSUES.get(handoff["reason"], "Ручная проверка"), "detail": handoff["summary"]}
     elif row["status"] == "failed":
         issue = {"label": "Ошибка обработки", "detail": "Перепроверьте последнее сообщение."}
-    if row["manager_replied_at"] is not None:
+    if row["workflow_status"] is not None:
+        status = row["workflow_status"]
+    elif row["manager_replied_at"] is not None:
         status = "resolved"
     else:
         status = "review" if issue else "resolved" if result.get("quote") or row["customer_resolved_at"] else "waiting"
@@ -217,13 +227,18 @@ def _operator_request(row: dict) -> dict:
         "id": identifier,
         "title": row["messages"][0].text[:160] if row["messages"] else "Обращение",
         "customer": "Клиент",
-        "updatedAt": row["updated_at"].isoformat(),
+        "latestTurnId": str(row["turn_id"]),
+        "updatedAt": max(filter(None, (row["updated_at"], row["workflow_updated_at"], row["manager_replied_at"]))).isoformat(),
         "scenario": scenario,
         "status": status,
         "response": _present({**row, "result": result}, identifier),
     }
     if handoff:
         view["handoffId"] = str(row["handoff_id"])
+        view["needsReply"] = bool(row["workflow_status"] == "review" and row["needs_reply"])
+        view["articlePublished"] = row["article_published_at"] is not None
+        if row["contact_email"]:
+            view["contactEmail"] = row["contact_email"]
         if row["manager_replied_at"] is not None:
             view["managerRepliedAt"] = row["manager_replied_at"].isoformat()
         shown_ids = {product["offer_id"] for product in result.get("products", [])}
@@ -335,11 +350,24 @@ def advisor_router(store: ChatStore, manager_token: str | None, hours: SupportHo
     def send_manager_reply(handoff_id: UUID, body: ManagerReplyInput, request: Request, response: Response):
         require_operator(request, response)
         try:
-            return store.reply_to_handoff(handoff_id, body.text, body.confirmed_quote_turn_id)
+            return store.reply_to_handoff(
+                handoff_id, body.text, body.confirmed_quote_turn_id,
+                str(body.client_message_id) if body.client_message_id else None, body.next_status, body.seen_turn_id,
+            )
         except TurnNotFound:
             raise HTTPException(404, "Manager case not found") from None
         except MessageConflict:
             raise HTTPException(409, "Reply already saved or quote cannot be confirmed") from None
+
+    @router.put("/requests/{handoff_id}/status", status_code=204)
+    def set_manager_status(handoff_id: UUID, body: ManagerStatusInput, request: Request, response: Response):
+        require_operator(request, response)
+        try:
+            store.change_handoff_status(handoff_id, body.status, body.seen_turn_id)
+        except TurnNotFound:
+            raise HTTPException(404, "Manager case not found") from None
+        except MessageConflict:
+            raise HTTPException(409, "The conversation has changed") from None
 
     @router.post("/requests/{handoff_id}/knowledge")
     def publish_manager_knowledge(handoff_id: UUID, body: ManagerArticleInput, request: Request, response: Response):

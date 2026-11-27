@@ -128,6 +128,62 @@ class StoreAdvisorTests(unittest.TestCase):
         self.assertEqual(item["issue"]["label"], "Попросили менеджера")
         self.assertEqual(len(item["response"]["messages"]), 4)
 
+    def test_waiting_case_reopens_on_customer_message_and_accepts_a_second_reply(self):
+        from softline_backend.support_hours import SupportHours
+
+        hours = SupportHours.from_values("09:00", "18:00", "1,2,3,4,5", "Europe/Moscow", "support@example.test")
+        client = TestClient(create_app(self.store, manager_token="advisor-manager", support_hours=hours))
+        self.addCleanup(client.close)
+        first = client.post("/api/consultation", json={"message": "Позовите менеджера"}).json()
+        chat_id, token = first["conversationId"].split(".")
+        customer = {"Authorization": f"Bearer {token}"}
+        operator = {"Authorization": "Bearer advisor-manager"}
+        chat = f"/chats/{chat_id}"
+        item, = client.get("/api/requests", headers=operator).json()
+        case = f"/api/requests/{item['handoffId']}"
+
+        contact = {"email": "reviewer@example.test"}
+        self.assertEqual(client.put(chat + "/support/contact", json=contact).status_code, 401)
+        self.assertNotIn("email", client.get(chat + "/support", headers=customer).json()["support"])
+        saved = client.put(chat + "/support/contact", json=contact, headers=customer)
+        self.assertEqual(saved.status_code, 200, saved.text)
+        self.assertEqual(saved.json()["support"]["email"], "support@example.test")
+        self.assertNotIn(contact["email"], saved.text)
+
+        private = {
+            "text": "Когда нужны лицензии?", "clientMessageId": str(uuid4()),
+            "seenTurnId": item["latestTurnId"], "nextStatus": "waiting",
+        }
+        sent = client.post(case + "/reply", json=private, headers=operator)
+        self.assertEqual(sent.status_code, 200, sent.text)
+        self.assertEqual(client.post(case + "/reply", json=private, headers=operator).json(), sent.json())
+        waiting, = client.get("/api/requests", headers=operator).json()
+        self.assertEqual(waiting["status"], "waiting")
+        self.assertEqual(waiting["contactEmail"], contact["email"])
+
+        incoming = {"client_message_id": "stable-follow-up", "text": "В понедельник"}
+        accepted = client.post(chat + "/manager-messages", json=incoming, headers=customer)
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        self.assertEqual(client.post(chat + "/manager-messages", json=incoming, headers=customer).json(), accepted.json())
+        item, = client.get("/api/requests", headers=operator).json()
+        self.assertEqual(item["status"], "review")
+        self.assertTrue(item["needsReply"])
+        stale = client.put(case + "/status", json={"status": "resolved", "seenTurnId": waiting["latestTurnId"]}, headers=operator)
+        self.assertEqual(stale.status_code, 409)
+
+        followup = {
+            "text": "Проверю возможность поставки.", "clientMessageId": str(uuid4()),
+            "seenTurnId": item["latestTurnId"], "nextStatus": "resolved",
+        }
+        sent = client.post(case + "/reply", json=followup, headers=operator)
+        self.assertEqual(sent.status_code, 200, sent.text)
+        self.assertEqual(client.post(case + "/reply", json=followup, headers=operator).json(), sent.json())
+        self.assertEqual(client.get(chat + "/support", headers=customer).json()["status"], "resolved")
+        history = client.get(chat + "/messages", headers=customer).json()
+        self.assertEqual([message["text"] for message in history[-3:]],
+                         [private["text"], incoming["text"], followup["text"]])
+        self.assertEqual([message.get("author") for message in history[-3:]], ["manager", None, "manager"])
+
     def test_manager_reply_and_public_article_are_distinct_and_persistent(self):
         client = self.client
         initial = client.post("/api/consultation", json={"message": "Позовите менеджера"}).json()

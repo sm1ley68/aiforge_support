@@ -206,7 +206,7 @@ export function QueueDashboard({ requests, counts, sourcedCount, issues, loading
                       <div className="dashboard-request-head" aria-hidden="true">
                         <span>Запрос / компания</span>
                         <span>{isReview ? 'Причина проверки' : 'Статус'}</span>
-                        <span>Обновлён {isReview ? '↑' : '↓'}</span>
+                        <span>Обновлён{isReview ? reviewQueue.some(item => item.needsReply) ? '' : ' ↑' : ' ↓'}</span>
                       </div>
                       <ul key={view} className="dashboard-list dashboard-requests">
                         {visible.map(request => {

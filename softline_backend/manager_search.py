@@ -68,8 +68,8 @@ def product_scope(text: str, history: list[MessageView], catalog: SoftlineCatalo
 @lru_cache(maxsize=1)
 def _morphology():
     try:
-        from natasha import MorphVocab
-        return MorphVocab()
+        from pymorphy3 import MorphAnalyzer
+        return MorphAnalyzer(lang="ru")
     except (ImportError, AttributeError, OSError):
         return None
 
@@ -78,7 +78,9 @@ def _morphology():
 def _lemma(word: str) -> str:
     morph = _morphology()
     if morph is not None and re.fullmatch(r"[а-я]{3,}", word):
-        word = morph.parse(word)[0].normal
+        forms = morph.parse(word)
+        if forms:
+            word = forms[0].normal_form
     return _SYNONYMS.get(word, word)
 
 

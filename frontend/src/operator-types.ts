@@ -18,6 +18,11 @@ export type OperatorRequest = {
   updatedAt: string;
   scenario: Scenario;
   status: OperatorStatus;
+  handoffId?: string;
+  latestTurnId?: string;
+  managerRepliedAt?: string;
+  articlePublished?: boolean;
+  contactEmail?: string;
   needsReply?: boolean;
   handledBy?: 'agent' | 'support';
   issue?: { label: string; detail: string; checks?: string[] };
