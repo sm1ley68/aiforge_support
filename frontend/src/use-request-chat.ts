@@ -1,11 +1,12 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { OperatorRequest } from './operator-types';
 import { demoChatKey, readSupportChat, saveSupportAction, subscribeToChatChanges, type ChatDraft, type SupportMessage } from './request-chat-storage';
+import { isMockQueue } from './use-operator-queue';
 
 export const attachmentLimit = 5;
 export const attachmentBytesLimit = 10 * 1024 * 1024;
 const endpoint = import.meta.env.VITE_SUPPORT_MESSAGES_URL?.trim();
-const demoSupport = !endpoint;
+const demoSupport = !endpoint && isMockQueue;
 const emptyDraft: ChatDraft = { text: '', files: [] };
 
 type ChatState = {

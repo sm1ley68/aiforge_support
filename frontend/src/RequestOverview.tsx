@@ -19,14 +19,14 @@ const comparisonResults = {
 } satisfies Record<ComparisonState, { label: string; icon: IconName }>;
 const revealEase = [0.16, 1, 0.3, 1] as const;
 
-function fallbackRows({ response, issue }: OperatorRequest, showReason = true): RequestComparisonRow[] {
+function fallbackRows({ response, issue }: OperatorRequest): RequestComparisonRow[] {
   const rows: RequestComparisonRow[] = response.requirements.map(({ label, value }) => ({
     label, value, result: 'Нет сопоставления в ответе', state: 'missing',
   }));
 
   if (issue) {
     const checks = Array.isArray(issue.checks) ? issue.checks.filter(check => typeof check === 'string' && check.trim()) : [];
-    for (const label of checks.length ? checks : showReason ? [issue.label] : []) {
+    for (const label of checks.length ? checks : [issue.label]) {
       rows.push({ label, result: 'Нужно проверить', state: 'review', detail: issue.detail });
     }
   }
@@ -125,10 +125,9 @@ function ComparisonResult({ row, source, hidden, delay, reduceMotion }: {
   );
 }
 
-export function RequestOverview({ request, onProducts, live = false }: {
+export function RequestOverview({ request, onProducts }: {
   request: OperatorRequest;
   onProducts: () => void;
-  live?: boolean;
 }) {
   const [filter, setFilter] = useState<ComparisonState | null>(null);
   const resultsId = useId();
@@ -139,39 +138,30 @@ export function RequestOverview({ request, onProducts, live = false }: {
     ? comparison.rows
     : [];
   const hasComparison = comparisonRows.length > 0;
-  const reason = live ? request.issue : undefined;
-  const rows = hasComparison ? comparisonRows : fallbackRows(request, !reason);
-  const product = candidate ?? (live && response.products.length === 1 ? response.products[0] : undefined);
+  const rows = hasComparison ? comparisonRows : fallbackRows(request);
   const counts: ComparisonCounts = { match: 0, review: 0, missing: 0 };
   for (const row of comparisonRows) counts[row.state] += 1;
   const activeFilter = filter && counts[filter] > 0 ? filter : null;
   const attentionCount = comparisonRows.length - counts.match;
-  const showCaseStatus = live || !hasComparison;
-  const waveHeight = showCaseStatus ? 26 : 44 * attentionCount / comparisonRows.length;
-  const tone = showCaseStatus ? request.status : attentionCount ? 'review' : 'resolved';
+  const waveHeight = hasComparison ? 44 * attentionCount / comparisonRows.length : 26;
+  const tone = hasComparison ? (attentionCount ? 'review' : 'resolved') : request.status;
   const status = statuses.find(item => item.id === request.status);
-  const reasonOnly = Boolean(reason && !rows.length && response.products.length === 0);
 
-  if (!rows.length && !response.products.length && !reason) return null;
+  if (!rows.length && !response.products.length) return null;
 
   return (
-    <section className={live ? 'request-fit request-fit--live' : 'request-fit'} aria-labelledby={`${resultsId}-title`}>
+    <section className="request-fit" aria-labelledby={`${resultsId}-title`}>
       <div className="request-fit-content">
         <header className="request-fit-header">
-          <h3 id={`${resultsId}-title`}>{reasonOnly ? 'Причина передачи' : 'Сопоставление условий'}</h3>
+          <h3 id={`${resultsId}-title`}>Сопоставление условий</h3>
           {response.products.length > 0 && (
             <button type="button" className="request-fit-product" onClick={onProducts}>
               <AppIcon name="products" size={15} />
-              <span>{product ? `${product.name}${product.version ? ` (${product.version})` : ''}` : 'Варианты подбора'}</span>
+              <span>{candidate ? `${candidate.name}${candidate.version ? ` (${candidate.version})` : ''}` : 'Варианты подбора'}</span>
               <AppIcon name="chevron" size={15} />
             </button>
           )}
         </header>
-        {reason && <div className="request-fit-reason" role={reasonOnly ? undefined : 'region'} aria-label={reasonOnly ? undefined : 'Причина передачи'}>
-          {!reasonOnly && <span>Причина передачи</span>}
-          <strong>{reason.label}</strong>
-          {reason.detail !== reason.label && <p>{reason.detail}</p>}
-        </div>}
         {hasComparison && (
           <ComparisonBreakdown
             counts={counts}
@@ -208,15 +198,15 @@ export function RequestOverview({ request, onProducts, live = false }: {
           <span className="request-fit-wave request-fit-wave--edge" />
         </div>
         <div className="request-fit-status-copy">
-          {showCaseStatus ? (
-            <>
-              <span>Статус запроса</span>
-              <b><AppIcon name={request.status} size={17} />{live && request.status === 'review' ? 'Требуется действие' : status?.label}</b>
-            </>
-          ) : (
+          {hasComparison ? (
             <>
               <span>Требуют внимания</span>
               <p><strong>{attentionCount}</strong> из {comparisonRows.length}</p>
+            </>
+          ) : (
+            <>
+              <span>Статус запроса</span>
+              <b><AppIcon name={request.status} size={17} />{status?.label}</b>
             </>
           )}
         </div>

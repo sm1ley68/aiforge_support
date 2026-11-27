@@ -3,7 +3,6 @@ import { AnimatePresence } from 'motion/react';
 import { AgentTestDialog } from './AgentTestDialog';
 import { AppIcon } from './AppIcon';
 import { JournalTable } from './JournalTable';
-import { OperatorLogin } from './OperatorLogin';
 import { OperatorRoutePane } from './OperatorRoutePane';
 import { QueueFeedback, QueueSearch, filterRequests, requestsToReview, reviewReason } from './QueueControls';
 import { statuses } from './QueueAnalytics';
@@ -13,7 +12,7 @@ import { RequestPreview } from './RequestPreview';
 import { SelectedRequest } from './RequestViews';
 import { journalHref, useOperatorNavigation, workspaceHref } from './use-operator-navigation';
 import { useOperatorQueue } from './use-operator-queue';
-import './operator-live.css';
+import { customerChatView } from './store-advisor-demo';
 
 export function OperatorWorkspace() {
   const { route, desk, filter, setFilter, query, setQuery, previewId, setPreviewId, navigate } = useOperatorNavigation();
@@ -21,7 +20,7 @@ export function OperatorWorkspace() {
   const requestId = params.get('request');
   const isJournal = requestId === null && (params.get('view') === 'journal' || params.has('status') || params.has('issue'));
   const isDashboard = requestId === null && !isJournal;
-  const { requests, loading, error, reload, unauthorized } = useOperatorQueue();
+  const { requests, loading, error, reload, changeStatus } = useOperatorQueue();
   const [testing, setTesting] = useState(false);
   const previewTrigger = useRef<HTMLButtonElement>(null);
   const closedPreviewTrigger = useRef<HTMLButtonElement>(null);
@@ -80,8 +79,6 @@ export function OperatorWorkspace() {
     trigger.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: reduced ? 'instant' : 'smooth' });
   }
 
-  if (unauthorized) return <OperatorLogin onSignedIn={reload} />;
-
   return (
     <main className={`stage stage--ascii stage--operator${isDashboard ? ' stage--dashboard' : ''}`} onClick={navigate}>
       <div className="workspace workspace--nav-mono">
@@ -92,7 +89,7 @@ export function OperatorWorkspace() {
             <a data-workspace-link className="rail-button" href={journalHref()} title="Журнал запросов" aria-label="Журнал запросов" aria-current={isJournal ? 'page' : undefined}><AppIcon name="journal" size={20} /></a>
           </div>
           <div className="rail-utilities">
-            <a className="rail-button" href={workspaceHref({ view: 'chat' })} title="Клиентский чат" aria-label="Клиентский чат"><AppIcon name="agent" size={20} /></a>
+            <a className="rail-button" href={customerChatView} title="Клиентский чат" aria-label="Клиентский чат"><AppIcon name="agent" size={20} /></a>
             <RailButton icon="test" title="Тест агента" onClick={() => setTesting(true)} />
           </div>
         </nav>
@@ -187,7 +184,8 @@ export function OperatorWorkspace() {
                 <div className="request-detail">
                   {request ? (
                     <SelectedRequest key={request.id} request={request} reviewQueue={reviewQueue}
-                      requestHref={id => workspaceHref({ request: id })} reload={reload} />
+                      requestHref={id => workspaceHref({ request: id })}
+                      changeStatus={changeStatus && (status => changeStatus(request, status))} />
                   ) : (
                     <div className="request-unavailable">
                       <h1>Запрос</h1>

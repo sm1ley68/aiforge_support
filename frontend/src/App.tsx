@@ -1,7 +1,10 @@
+import { NavigationDemo } from './NavigationDemo';
+import type { NavigationLayout } from './NavigationDemo';
 import { OperatorWorkspace } from './OperatorWorkspace';
-import { LiveStoreAdvisor } from './LiveStoreAdvisor';
+import { StoreAdvisor } from './StoreAdvisor';
 
-export function App() {
+export function App({ navigation }: { navigation?: NavigationLayout }) {
   const view = new URLSearchParams(window.location.search).get('view');
-  return view === 'chat' || view === 'store' ? <LiveStoreAdvisor /> : <OperatorWorkspace />;
+  if (view === 'chat' || view === 'store') return <StoreAdvisor />;
+  return navigation ? <NavigationDemo navigation={navigation} /> : <OperatorWorkspace />;
 }

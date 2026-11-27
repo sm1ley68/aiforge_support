@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { createAgentClient } from '../agent-client.mjs';
+import { demoConversation, mockAgent } from '../mock-agent.mjs';
 import type { AgentResponse, Message, Scenario } from './agent-types';
 
-const endpoint = import.meta.env.VITE_AGENT_API_URL?.trim() || '/api/consultation';
+const endpoint = import.meta.env.VITE_AGENT_API_URL?.trim() ?? '';
 const catalogProductId = new URLSearchParams(window.location.search).get('product')?.trim();
 
-const client = createAgentClient({ endpoint });
+export const isDemo = !endpoint;
+
+const client = createAgentClient({ endpoint, mock: mockAgent });
 const empty: AgentResponse = {
   conversationId: null,
   messages: [],
@@ -17,13 +20,18 @@ const empty: AgentResponse = {
   suggestedReplies: [],
 };
 
-export function useConsultation() {
-  const [conversation, setConversation] = useState({ response: empty, messages: empty.messages });
+export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}) {
+  const [conversation, setConversation] = useState(() => {
+    const response = isDemo && seedDemo && !catalogProductId ? demoConversation : empty;
+    return { response, messages: response.messages };
+  });
   const { response, messages } = conversation;
-  const scenario: Scenario | null = catalogProductId ? 'known' : null;
+  const [scenario, setScenario] = useState<Scenario | null>(catalogProductId || response.conversationId ? 'known' : null);
+  const [productId, setProductId] = useState(catalogProductId || undefined);
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [session, setSession] = useState(0);
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
@@ -50,7 +58,7 @@ export function useConsultation() {
         message,
         scenario,
         history: messages,
-        catalogProductId: catalogProductId || undefined,
+        catalogProductId: productId,
       }, { signal: controller.signal });
 
       if (controller.signal.aborted) return;
@@ -73,5 +81,17 @@ export function useConsultation() {
     }
   }
 
-  return { response, messages, draft, setDraft, pending, error, send };
+  function reset(nextScenario: Scenario | null = null) {
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+    setConversation({ response: empty, messages: empty.messages });
+    setScenario(nextScenario);
+    setProductId(undefined);
+    setDraft('');
+    setPending(false);
+    setError('');
+    setSession(current => current + 1);
+  }
+
+  return { response, messages, scenario, draft, setDraft, pending, error, session, send, reset };
 }
