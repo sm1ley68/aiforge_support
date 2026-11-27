@@ -12,7 +12,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](compose.yaml)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](compose.yaml)
 
-**[Онлайн-стенд](#онлайн-стенд) · [Быстрый запуск для жюри](#быстрый-запуск-для-жюри) · [Архитектура](#как-устроена-система) · [Результаты](#как-проверяли)**
+**[Онлайн-стенд](#онлайн-стенд) · [Архитектура](#как-устроена-система) · [Результаты](#как-проверяли)**
 
 </div>
 
@@ -27,7 +27,8 @@
 
 Для входа в кабинет нужен ключ онлайн-стенда. При действующей сессии повторный ввод не требуется.
 
-## Быстрый запуск для жюри
+<details>
+<summary>Локальный запуск через Docker</summary>
 
 > **Демо запускается без ключа к модели.** Тестовый каталог уже в репозитории.
 
@@ -76,15 +77,7 @@ docker compose --env-file "$RUN_DIR/compose.env" up -d --wait
 curl -fsS http://127.0.0.1:8080/health/ready
 ```
 
-### 3. Откройте чат и кабинет менеджера
-
-| Где | Адрес |
-| --- | --- |
-| Клиентский чат | [localhost:8080/advisor?view=chat](http://127.0.0.1:8080/advisor?view=chat) |
-| Кабинет менеджера | [localhost:8080/advisor?view=journal](http://127.0.0.1:8080/advisor?view=journal) |
-| OpenAPI | [localhost:8080/docs](http://127.0.0.1:8080/docs) |
-
-Для входа в кабинет используйте тестовый токен **`jury-local-demo`**. Стенд привязан к локальному адресу. Если порт `8080` занят, измените `PORT` в `ml_pipeline/.local/jury/compose.env`.
+После запуска откройте [чат](http://127.0.0.1:8080/advisor?view=chat) или [журнал менеджера](http://127.0.0.1:8080/advisor?view=journal). Ключ локального журнала — `jury-local-demo`.
 
 ### Остановка стенда
 
@@ -93,6 +86,8 @@ curl -fsS http://127.0.0.1:8080/health/ready
 ```sh
 docker compose --env-file ml_pipeline/.local/jury/compose.env down
 ```
+
+</details>
 
 ---
 
