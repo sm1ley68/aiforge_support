@@ -13,7 +13,7 @@ from pydantic import TypeAdapter
 
 from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
-from aisupport_ml.commerce.contracts import CatalogContext, Message, State
+from aisupport_ml.commerce.contracts import CatalogContext, Message, Recommendation, State
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.retrieval import KnowledgeBase
 from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE, desktop_evidence
@@ -118,7 +118,7 @@ def commerce_provider_key() -> str:
     return os.getenv("POLZA_API_KEY", "").strip() or os.getenv("LLM_API_KEY", "").strip()
 
 
-def _card(offer: CatalogOffer, *, node_price: bool) -> ProductCard | None:
+def _card(offer: CatalogOffer, recommendation: Recommendation | None) -> ProductCard | None:
     url = validated_url(offer.url)
     if url is None:
         return None
@@ -128,7 +128,7 @@ def _card(offer: CatalogOffer, *, node_price: bool) -> ProductCard | None:
         return None
     if snapshot.tzinfo is None:
         snapshot = snapshot.replace(tzinfo=FEED_TIMEZONE)
-    source = Source(title=offer.title, url=url)
+    source = Source(title=f"{offer.title} · фид от {offer.snapshot_at}", url=url)
     attributes = {
         "license_type": offer.license_type,
         "term": offer.term,
@@ -140,10 +140,23 @@ def _card(offer: CatalogOffer, *, node_price: bool) -> ProductCard | None:
     facts = [VerifiedFact(field=field, value=str(value), source=source)
              for field, value in attributes.items() if value is not None]
     summary = "Данные из снимка каталога"
-    if desktop_evidence(offer) is not None:
+    if desktop := desktop_evidence(offer):
         summary = "Цена указана за ПК"
-    elif node_price and "по количеству узлов" in offer.title.casefold():
-        summary = "Цена указана за узел"
+        if offer.term is None and desktop.term_months is None and (desktop_url := validated_url(desktop.source.url)):
+            facts.append(VerifiedFact(field="term", value="бессрочная", source=Source(title=desktop.source.title, url=desktop_url)))
+    elif recommendation is not None:
+        summary = "Цена указана за узел" if "по количеству узлов" in offer.title.casefold() else "Цена указана за ПК"
+    if recommendation is not None:
+        for field, value, evidence in (
+            ("edition", recommendation.edition, recommendation.edition_source),
+            ("package_size", recommendation.package_size, recommendation.package_source),
+        ):
+            if evidence_url := validated_url(evidence.url):
+                facts.append(VerifiedFact(field=field, value=value, source=Source(title=evidence.title, url=evidence_url)))
+        facts.extend((
+            VerifiedFact(field="license_quantity", value=str(recommendation.quantity), source=source),
+            VerifiedFact(field="total_price", value=f"{recommendation.total:.2f} {offer.currency}", source=source),
+        ))
     return ProductCard(
         offer_id=offer.offer_id, sku=offer.vendor_code, title=offer.title, url=url,
         verified_facts=facts, match_summary=summary, price_amount=offer.price,
@@ -207,18 +220,23 @@ class CommerceBridge:
             elif result.handoff.reason == "manager_requested":
                 reason = "commercial_terms" if COMMERCIAL_REQUEST.search(text) else "customer_requested"
             summary = " ".join(text.split())[:240]
+            requirements = _requirements(context)
+            if result.handoff.reason in {"conflicting_sources", "support_follow_up"}:
+                label = "Спорный факт" if result.handoff.reason == "conflicting_sources" else "Что проверить"
+                requirements[label] = result.handoff.question
             return TurnResult(
                 outcome="handoff", text="Передал ваше обращение менеджеру.", sources=sources,
                 commerce_state=saved_state,
                 handoff=HandoffDetails(
-                    reason=reason, summary=summary, requirements=_requirements(context),
+                    reason=reason, summary=summary, requirements=requirements,
                     candidate_ids=list(context.shown_offers) if context else [], evidence=sources,
                 ),
             )
 
+        recommendations = {detail.offer_id: detail for detail in result.recommendations}
         products = [
             card for offer in result.products
-            if (card := _card(offer, node_price=result.outcome == "recommend")) is not None
+            if (card := _card(offer, recommendations.get(offer.offer_id))) is not None
         ]
         if result.outcome not in {"answer", "clarify", "recommend"} or len(products) != len(result.products):
             return TurnResult(

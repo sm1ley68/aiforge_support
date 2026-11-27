@@ -7,7 +7,8 @@ from dataclasses import dataclass, replace
 from urllib.parse import urlsplit
 
 from .catalog import CatalogOffer, SoftlineCatalog
-from .contracts import CatalogContext, Source
+from .contracts import CatalogContext, Recommendation, Source
+from .offer_evidence import commercial_dispute, offer_card, verified_security_package, verified_term
 from .extraction import OPTIONAL_TEXT, _literal, object_schema
 from .retrieval import normalize
 from .softline_evidence import (
@@ -59,7 +60,11 @@ _LOCAL = re.compile(r"\b(?:локальн\w*|on[ -]prem|на своих серв
 _CLOUD = re.compile(r"\b(?:в облаке|облако|облачн\w*|cloud|saas)\b", re.I)
 _CLOUD_EXCLUDED = re.compile(r"без облака|не в облаке|облако нельзя", re.I)
 _LOCAL_EXCLUDED = re.compile(r"не локально|локально нельзя", re.I)
-_EXACT_SKU = re.compile(r"^(?:(?:sku|артикул|код)\s*[:№]?\s*|(?:сколько стоит|есть ли в наличии)\s+)?([\w-]{2,40})[?.!]?$", re.I)
+_EXACT_SKU = re.compile(
+    r"^(?:(?:sku|артикул|код)\s*[:№]?\s*|"
+    r"(?:сколько стоит|есть ли в наличии|какой срок лицензии у|какой язык интерфейса у)\s+)?"
+    r"([\w-]{2,40})[?.!]?$", re.I,
+)
 _DEMO_NAMED = re.compile(r"^(?:(?:нужен|интересует|сколько стоит|есть ли в наличии|(?:хочу\s+)?продлить|возобновить)\s+)?"
                          r"(mdaemon(?:\s+messaging\s+server)?)(?=$|[\s,.?!])", re.I)
 _WINDOWS_PRODUCT = re.compile(r"^(?:(?:нужен|интересует|ищу)\s+)?(Windows Server(?:\s+\d{4})?)[?.!]*$", re.I)
@@ -124,6 +129,7 @@ _BARE_FACTS = (
     ("price", re.compile(r"(?:сколько (?:это )?стоит|какая цена|цена|сколько будет стоить)")),
     ("availability", re.compile(r"(?:есть(?: ли)? в наличии|в наличии|какое наличие)")),
     ("term", re.compile(r"(?:какой срок лицензии|на какой срок|на сколько месяцев|срок лицензии)")),
+    ("language", re.compile(r"(?:какой язык интерфейса|на каком языке интерфейс|есть ли русский интерфейс|язык интерфейса)")),
 )
 _COMPATIBILITY = re.compile(
     r"(?:совместим[ао]?(?: ли)? с|(?:подойдет|работает)(?: ли)? (?:для|на|под)|"
@@ -149,6 +155,8 @@ class CatalogDecision:
     context: CatalogContext | None
     products: tuple[CatalogOffer, ...] = ()
     sources: tuple[Source, ...] = ()
+    recommendations: tuple[Recommendation, ...] = ()
+    disputed_fact: str | None = None
 
 
 def parse_catalog_input(payload, text: str) -> CatalogInput:
@@ -190,11 +198,16 @@ def context_fact(text: str) -> str | None:
     return next((fact for fact, pattern in _BARE_FACTS if pattern.fullmatch(question)), None)
 
 
-def direct_sku(text: str) -> str | None:
+def direct_sku(text: str) -> CatalogInput | None:
     match = _EXACT_SKU.fullmatch(text)
     if match is None or not any(char.isdigit() for char in match[1]):
         return None
-    return match[1]
+    prefix = normalize(text[:match.start(1)])
+    fact = {
+        "сколько стоит": "price", "есть ли в наличии": "availability",
+        "какой срок лицензии у": "term", "какой язык интерфейса у": "language",
+    }.get(prefix)
+    return CatalogInput("fact" if fact else "named", product=match[1], fact=fact)
 
 
 def is_origin_follow_up(text: str) -> bool:
@@ -230,7 +243,7 @@ def backup_input(text: str, context: CatalogContext | None) -> CatalogInput | No
     if pending and any(pattern.search(text) for pattern in (
         _BACKUP_FILES, _BACKUP_IMAGE, _NO_IMAGE, _BACKUP_UNSUPPORTED, _BACKUP_COUNT,
         _FILE_SERVER, _LOCAL, _CLOUD, _BACKUP_LOCAL, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN, _TERM, _PERPETUAL,
-    )):
+    )) or pending and _months(text) is not None:
         return CatalogInput("continue")
     return None
 
@@ -260,7 +273,9 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
         return CatalogInput("continue")
     if context.mode == "need":
         mail, server = _EXCHANGE.search(text), _FILE_SERVER.search(text)
-        if mail or server or any(pattern.search(text) for pattern in (_NODE_COUNT, _LOCAL, _CLOUD, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN)):
+        if mail or server or _months(text) or any(pattern.search(text) for pattern in (
+            _NODE_COUNT, _LOCAL, _CLOUD, _BUDGET, _UNLIMITED_BUDGET, _RUSSIAN, _PERPETUAL,
+        )):
             return CatalogInput("continue", mail=mail[0] if mail else None, file_os=server[0] if server else None)
     return None
 
@@ -381,24 +396,24 @@ def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> 
         file_os = os_match[0] if os_match else patch.file_os
     russian_only = False if _RELAX_ORIGIN.search(text) else bool(_RUSSIAN.search(text)) or context.russian_only
     term = _months(text)
+    perpetual = term is None and (bool(_PERPETUAL.search(text)) or context.perpetual_only)
     updated = replace(
         context,
         edition=None if _CLEAR_EDITION.search(text) else edition or context.edition,
         users=_count(_USER_COUNT, text, context.users),
         nodes=_count(_NODE_COUNT, text, context.nodes),
-        term_months=term or context.term_months,
+        term_months=None if perpetual else term or context.term_months,
         mail=mail[0] if mail else patch.mail or context.mail,
         file_os=file_os or context.file_os,
         goal=patch.goal or context.goal, deployment=deployment, russian_only=russian_only,
         license_action=(_requested_license(text) or context.license_action) if context.mode == "named" else None,
+        perpetual_only=perpetual,
     )
     if updated.mode == "need" and desktop_task(updated.goal or ""):
         explicit_platforms = {normalize(match[0]) for match in _FILE_SERVER.finditer(text)}
-        perpetual = bool(_PERPETUAL.search(text)) or (updated.perpetual_only and term is None)
         return replace(
             updated, nodes=_count(_BACKUP_COUNT, text, context.nodes),
             file_os=None if len(explicit_platforms) > 1 else updated.file_os,
-            perpetual_only=perpetual, term_months=None if perpetual else updated.term_months,
             unverified_constraint=updated.unverified_constraint or bool(_DESKTOP_UNVERIFIED.search(text)),
         )
     if updated.mode != "need" or not _BACKUP_GOAL.search(updated.goal or ""):
@@ -410,12 +425,10 @@ def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> 
         scope = "disk_image"
     elif _BACKUP_FILES.search(text) or _NO_IMAGE.search(text):
         scope = "files"
-    perpetual = bool(_PERPETUAL.search(text)) or (updated.perpetual_only and term is None)
     explicit_systems = {normalize(match[0]) for match in _FILE_SERVER.finditer(text)}
     mixed_platforms = len(explicit_systems) > 1 and not explicit_systems <= {"windows 10", "windows 11"}
     return replace(
-        updated, backup_scope=scope, perpetual_only=perpetual,
-        term_months=None if perpetual else updated.term_months,
+        updated, backup_scope=scope,
         nodes=_count(_BACKUP_COUNT, text, context.nodes),
         file_os=None if mixed_platforms else updated.file_os,
         deployment="local" if _BACKUP_LOCAL.search(text) and not cloud else updated.deployment,
@@ -424,7 +437,8 @@ def _update(previous: CatalogContext | None, patch: CatalogInput, text: str) -> 
 
 def _sources(offers: tuple[CatalogOffer, ...]) -> tuple[Source, ...]:
     return tuple(
-        Source(f"softline-offer-{item.offer_id}", item.snapshot_at, item.title, _line(item), item.url, sku=item.offer_id)
+        Source(f"softline-offer-{item.offer_id}", item.snapshot_at, f"{item.title} · фид от {item.snapshot_at}",
+               _line(item), item.url, sku=item.offer_id)
         for item in offers
     )
 
@@ -487,6 +501,8 @@ def _named(index: SoftlineCatalog, context: CatalogContext) -> CatalogDecision:
                                    "Уточните редакцию, пришлите артикул или попросите показать варианты без фильтра по редакции.", context)
     if context.users:
         offers = tuple(item for item in offers if item.user_limit is not None and item.user_limit >= context.users)
+    if context.perpetual_only:
+        offers = tuple(item for item in offers if _PERPETUAL.search(item.term or item.title))
     if context.term_months:
         offers = tuple(item for item in offers if item.term and _months(item.term) == context.term_months)
     if context.license_action:
@@ -543,8 +559,11 @@ def _recommend_desktop(index: SoftlineCatalog, context: CatalogContext, task: De
         if len(matches) != 1:
             continue
         item, = matches
-        if (not _valid_offer(item) or normalize(evidence.title) not in normalize(item.title)
-                or item.available is not True or item.currency != "RUB" or item.price is None or item.price <= 0):
+        if not _valid_offer(item) or normalize(evidence.title) not in normalize(item.title):
+            continue
+        if conflict := _conflict(item, context):
+            return conflict
+        if item.available is not True or item.currency != "RUB" or item.price is None or item.price <= 0:
             continue
         if evidence.term_months is None:
             if normalize(item.license_type or "") not in {"полная версия", "full"}:
@@ -595,15 +614,18 @@ def _recommend_backup(index: SoftlineCatalog, context: CatalogContext) -> Catalo
     for license in BACKUP_LICENSES:
         if (license.scope != context.backup_scope or not license.min_devices <= context.nodes <= license.max_devices
                 or (context.russian_only and not license.russian_verified)
-                or (context.perpetual_only and not license.perpetual)
-                or context.term_months is not None):
+                or (context.perpetual_only and not license.perpetual)):
             continue
         matches = index.by_reference(license.sku)
         if len(matches) != 1:
             continue
         item, = matches
-        if (not _valid_offer(item) or item.vendor_code != license.sku or item.available is not True
-                or item.currency != "RUB" or item.price is None or item.price <= 0
+        if not _valid_offer(item) or item.vendor_code != license.sku:
+            continue
+        if conflict := _conflict(item, context):
+            return conflict
+        if (item.available is not True or item.currency != "RUB" or item.price is None or item.price <= 0
+                or (context.term_months is not None and _months(item.term or "") != context.term_months)
                 or normalize(item.license_type or "") not in {"полная версия", "full"}
                 or (license.perpetual and not _PERPETUAL.search(item.term or ""))):
             continue
@@ -644,6 +666,9 @@ def _recommend(index: SoftlineCatalog, context: CatalogContext, text: str) -> Ca
             return CatalogDecision("clarify", "На сколько устройств или пользователей нужна лицензия?", context)
         return CatalogDecision("clarify", "Для этих требований пока нет проверенного варианта. "
                                "Могу передать подбор менеджеру.", context)
+    if context.perpetual_only:
+        return CatalogDecision("clarify", "Для защиты Exchange и файловых серверов в проверенных позициях "
+                               "есть лицензии на 12 и 24 месяца. Бессрочный вариант не подтверждён.", context)
     if context.nodes is None:
         return CatalogDecision("clarify", "Сколько узлов или устройств нужно защитить?", context)
     if not context.mail:
@@ -673,8 +698,12 @@ def _recommend(index: SoftlineCatalog, context: CatalogContext, text: str) -> Ca
         if len(matches) != 1:
             continue
         item, = matches
-        if (not _valid_offer(item) or item.vendor_code != package.sku or not item.available or
-                item.price is None or item.currency != "RUB" or not item.term or _months(item.term) != package.term_months):
+        if not _valid_offer(item) or verified_security_package(item) != package:
+            continue
+        if conflict := _conflict(item, context):
+            return conflict
+        if (item.available is not True or item.price is None or item.currency != "RUB"
+                or _months(item.term or "") != package.term_months):
             continue
         if context.budget_rub is None or item.price * context.nodes <= context.budget_rub:
             options.append(item)
@@ -717,6 +746,13 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
         context = CatalogContext("named", product=item.offer_id, shown_offers=(item.offer_id,))
     sources = _sources(options)
     evidence = desktop_evidence(item)
+    card = offer_card(item)
+    if patch.fact == "language":
+        if card is not None and card.language:
+            return CatalogDecision("answer", f"{item.title} · язык интерфейса — {card.language}.",
+                                   context, options, (*sources, card.source))
+        return CatalogDecision("clarify", f"Язык интерфейса для «{item.title}» не подтверждён.",
+                               context, options, sources)
     if patch.fact == "price":
         value = f"{item.price:.2f} {item.currency}" if item.price is not None and item.currency else None
         if value:
@@ -743,9 +779,14 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
         )
     else:
         value = item.term
-        if value is None and evidence is not None and evidence.term_months is None:
-            return CatalogDecision("answer", f"{item.title} · бессрочная лицензия по данным производителя.",
-                                   context, options, (*sources, evidence.source))
+        if value is None and (verified := verified_term(item)):
+            term, source = verified
+            value = "бессрочная лицензия" if term == "perpetual" else f"{term} мес."
+            return CatalogDecision("answer", f"{item.title} · {value} по проверенным материалам.",
+                                   context, options, (*sources, source))
+        if value is None and card is not None and card.term:
+            return CatalogDecision("answer", f"{item.title} · срок лицензии по карточке — {card.term}.",
+                                   context, options, (*sources, card.source))
         label = "Срок лицензии"
     if value is None:
         return CatalogDecision("clarify", f"В фиде нет данных по параметру «{label.lower()}» для «{item.title}». "
@@ -754,10 +795,73 @@ def _fact(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catalo
     return CatalogDecision("answer", answer, context, options, sources)
 
 
+def _duration(text: str | None) -> int | str | None:
+    if text and _PERPETUAL.search(text):
+        return "perpetual"
+    return _months(text or "")
+
+
+def _conflict(item: CatalogOffer, context: CatalogContext | None, fact: str | None = None) -> CatalogDecision | None:
+    card = offer_card(item)
+    disputed = commercial_dispute(item, card, fact) if card is not None else None
+    article_term = verified_term(item)
+    secondary = [article_term] if article_term else []
+    if card is not None:
+        secondary.append((_duration(card.term), card.source))
+    if not disputed and fact in (None, "term") and (feed_term := _duration(item.term)) is not None:
+        for term, source in secondary:
+            if term is not None and feed_term != term:
+                confirmed = "бессрочная" if term == "perpetual" else f"{term} мес."
+                disputed = (f"Срок лицензии {item.vendor_code or item.offer_id}: "
+                            f"{item.term} в фиде от {item.snapshot_at}, "
+                            f"{confirmed} в источнике «{source.title}».")
+                break
+    if disputed:
+        context = replace(context, shown_offers=(item.offer_id,)) if context else None
+        return CatalogDecision("handoff", "", context,
+                               sources=(*_sources((item,)), *(source for _, source in secondary)),
+                               disputed_fact=disputed)
+    return None
+
+
+def _validate_evidence(decision: CatalogDecision, fact: str | None = None) -> CatalogDecision:
+    for item in decision.products:
+        if conflict := _conflict(item, decision.context, fact):
+            return conflict
+    if decision.outcome != "recommend":
+        return decision
+    quantity = decision.context.nodes
+    assert quantity is not None
+    details = tuple(_recommendation(item, quantity) for item in decision.products)
+    rows = [f"{detail.offer_id} · редакция {detail.edition}, размер пакета: {detail.package_size}, "
+            f"лицензий: {detail.quantity}." for detail in details]
+    return replace(decision, text="\n".join((decision.text, *rows)), recommendations=details)
+
+
+def _recommendation(item: CatalogOffer, quantity: int) -> Recommendation:
+    assert item.price is not None
+    if desktop := desktop_evidence(item):
+        package = "1 ПК" if desktop.max_devices is None else f"1 ПК (тариф до {desktop.max_devices} ПК)"
+        return Recommendation(item.offer_id, desktop.edition, package, quantity, item.price * quantity,
+                              desktop.source, desktop.source)
+    if package := verified_security_package(item):
+        return Recommendation(item.offer_id, "Базовая", f"Тариф {package.min_nodes}–{package.max_nodes} узлов",
+                              quantity, item.price * quantity, PACKAGE_SOURCES[0], PACKAGE_SOURCES[0])
+    license = next(license for license in BACKUP_LICENSES if license.sku == item.vendor_code)
+    if license.vendor == "cyber":
+        return Recommendation(item.offer_id, "Стандартная", "1 ПК", quantity, item.price * quantity,
+                              BACKUP_SOURCES["cyber"][0], BACKUP_SOURCES["cyber"][0])
+    edition = "Standard" if license.scope == "files" else "Professional"
+    package = ("1 ПК" if license.max_devices == 1
+               else f"1 ПК (тариф {license.min_devices}–{license.max_devices} ПК)")
+    edition_source, package_source = BACKUP_SOURCES["handy"]
+    return Recommendation(item.offer_id, edition, package, quantity, item.price * quantity, edition_source, package_source)
+
+
 def decide(index: SoftlineCatalog, previous: CatalogContext | None, patch: CatalogInput, text: str) -> CatalogDecision:
     patch = _keep_selection(previous, patch, text)
     if patch.action == "fact":
-        return _fact(index, previous, patch, text)
+        return _validate_evidence(_fact(index, previous, patch, text), patch.fact)
     if patch.action == "other":
         return CatalogDecision("clarify", "Назовите продукт или опишите задачу, для которой подбираете решение.", previous)
     context = _update(previous, patch, text)
@@ -766,4 +870,4 @@ def decide(index: SoftlineCatalog, previous: CatalogContext | None, patch: Catal
     decision = _named(index, context) if context.mode == "named" else _recommend(index, context, text)
     if decision.outcome == "clarify" and context != previous and context.shown_offers:
         return replace(decision, context=replace(context, shown_offers=()))
-    return decision
+    return _validate_evidence(decision)

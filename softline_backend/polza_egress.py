@@ -111,7 +111,9 @@ _privacy_slot = Lock()
 
 def _screen_with_ml(scope: TurnScope) -> dict:
     stored = scope.stored_state or {}
-    if any(value for key, value in stored.items() if key != "catalog_context"):
+    if stored.get("support_topic") not in (None, "keys", "activation", "returns"):
+        return {"decision": "uncertain"}
+    if any(value for key, value in stored.items() if key not in {"catalog_context", "support_topic"}):
         return {"decision": "uncertain"}
     stored_selection = stored.get("catalog_context")
     if isinstance(stored_selection, dict):

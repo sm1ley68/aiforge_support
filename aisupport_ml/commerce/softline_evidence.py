@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 
 from .catalog import CatalogOffer
 from .contracts import Source
+from .support_answers import SUPPORT_ANSWERS
 
 
 MDAEMON_LICENSING = Source(
@@ -18,6 +19,7 @@ MDAEMON_LICENSING = Source(
 class VerifiedSeatOffer:
     reference: str
     title: str
+    edition: str
     platforms: tuple[str, ...]
     max_devices: int | None
     term_months: int | None
@@ -42,7 +44,7 @@ DESKTOP_TASKS = (
         ),
         (
             VerifiedSeatOffer(
-                "EP2-07001", "Microsoft Project Professional 2024", ("windows 10", "windows 11"),
+                "EP2-07001", "Microsoft Project Professional 2024", "Professional 2024", ("windows 10", "windows 11"),
                 None, None, False,
                 Source(
                     "ms-project-2024", "2026-11-26", "Microsoft — возможности и требования Project Professional 2024",
@@ -58,7 +60,7 @@ DESKTOP_TASKS = (
         re.compile(r"\b(?:редактировани\w*\s+pdf|редактировать\s+pdf|pdf[ -]+редактор\w*|редактор\w*\s+pdf)\b", re.I),
         (
             VerifiedSeatOffer(
-                "541420", "PDF Commander Бизнес", ("windows 10", "windows 11"), 3, None, True,
+                "541420", "PDF Commander Бизнес", "Бизнес", ("windows 10", "windows 11"), 3, None, True,
                 Source(
                     "pdf-commander-editing", "2026-11-26", "PDF Commander — редактирование текста PDF",
                     "Прямое редактирование текста PDF доступно в версии для Windows. "
@@ -67,7 +69,7 @@ DESKTOP_TASKS = (
                 ),
             ),
             VerifiedSeatOffer(
-                "541424", "PDF Commander Бизнес", ("windows 10", "windows 11"), 3, 12, True,
+                "541424", "PDF Commander Бизнес", "Бизнес", ("windows 10", "windows 11"), 3, 12, True,
                 Source(
                     "pdf-commander-subscription", "2026-11-26", "PDF Commander — годовая бизнес-лицензия",
                     "Годовая подписка для организаций лицензируется по рабочим местам. "
@@ -231,19 +233,7 @@ CATALOG_KNOWLEDGE = (
         ),
         reusable=True,
     ),
-    Source(
-        "softline-lk-keys", "2026-11-26", "Ключи активации и дистрибутивы",
-        "Для уже купленного продукта войдите в личный кабинет «Софтлайн Цифровой Актив» "
-        "и откройте «Дистрибутивы и ключи». Для поиска по заказу откройте его в разделе "
-        "«Счета и платежи» и перейдите на страницу нужного продукта.",
-        "https://docs.softline.com/ru-ru/lk/fulfillment",
-        aliases=(
-            "Где скачать ключ активации", "Где ключи от купленных лицензий", "Где мои ключи",
-            "Где найти ключ активации после покупки", "Где скачивать дистрибутив",
-            "Как скачать дистрибутив", "Где найти ключи и дистрибутивы",
-        ),
-        reusable=True,
-    ),
+    *SUPPORT_ANSWERS.values(),
     Source(
         "softline-lk-closing-documents", "2026-11-26", "Закрывающие документы по заказу",
         "Для заказа, самостоятельно оформленного в Store, найдите его в разделе «Счета и платежи» "

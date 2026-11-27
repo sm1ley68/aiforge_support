@@ -1,16 +1,23 @@
+from dataclasses import replace
+from decimal import Decimal
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
+from uuid import uuid4
 from xml.sax.saxutils import escape
 
 from aisupport_ml.commerce import CommerceAgent
 from aisupport_ml.commerce.catalog import SoftlineCatalog, build_catalog
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.mock import MockSupport
+from aisupport_ml.commerce.offer_evidence import OFFER_CARDS
 from aisupport_ml.commerce.retrieval import KnowledgeBase
 from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE
 from aisupport_ml.contracts import TemporaryReadError, Usage
+from softline_backend.commerce_bridge import CommerceBridge
+from softline_backend.store import ClaimedTurn
 
 
 class ExtractionStub:
@@ -40,7 +47,7 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         override = os.environ.get("SOFTLINE_CHAT_TEST_INDEX")
         if override:
-            self.index = SoftlineCatalog(Path(override))
+            self.index_path = Path(override)
         else:
             temporary = TemporaryDirectory()
             self.addCleanup(temporary.cleanup)
@@ -78,7 +85,8 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
             feed.write_text(f'<yml_catalog date="2026-11-25 14:12"><shop><offers>{"".join(sample)}</offers></shop></yml_catalog>',
                             encoding="utf-8")
             build_catalog(feed, index)
-            self.index = SoftlineCatalog(index)
+            self.index_path = index
+        self.index = SoftlineCatalog(self.index_path)
         self.model = ExtractionStub()
         self.chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase([]), catalog_index=self.index))
 
@@ -397,3 +405,154 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(unsupported.outcome, "clarify")
         self.assertFalse(unsupported.products)
+
+
+    async def test_three_categories_expose_verified_license_details(self):
+        class Offline:
+            async def complete(self, *_):
+                raise TemporaryReadError("no outbound calls")
+
+        chat = MockSupport(CommerceAgent(Offline(), knowledge=KnowledgeBase([]), catalog_index=self.index))
+        examples = (
+            ("security", "Надо защитить почту и файлы, Exchange, Windows Server, локально, "
+                         "40 устройств, бюджет до 350 тысяч рублей", "5065", "Базовая",
+             "Тариф 25–49 узлов", 40, "309420.00"),
+            ("backup", "Резервное копирование файлов, 10 компьютеров с Windows 11 на внешние диски, "
+                       "бюджет до 40 тысяч рублей", "339688", "Standard",
+             "1 ПК (тариф 10–999 ПК)", 10, "30800.00"),
+            ("projects", "Нужно планирование проектов на 2 ПК с Windows 11", "473583", "Professional 2024",
+             "1 ПК", 2, "353278.00"),
+        )
+        for key, query, offer_id, edition, size, quantity, price in examples:
+            with self.subTest(category=key):
+                result = await chat.reply(key, "1", query)
+                self.assertEqual(result.outcome, "recommend")
+                detail, = result.recommendations
+                self.assertEqual((detail.offer_id, detail.edition, detail.package_size, detail.quantity, detail.total),
+                                 (offer_id, edition, size, quantity, Decimal(price)))
+                self.assertIn(detail.edition_source, result.sources)
+                self.assertIn(detail.package_source, result.sources)
+                self.assertTrue(any(source.sku == offer_id and "фид от" in source.title for source in result.sources))
+
+        increased = await chat.reply("security", "2", "Теперь 50 узлов, бюджет до 650 тысяч рублей")
+        self.assertEqual({detail.offer_id for detail in increased.recommendations}, {"5066", "5058"})
+        term = await chat.reply("security", "3", "А на 24 месяца?")
+        two_year, = term.recommendations
+        self.assertEqual((two_year.offer_id, two_year.quantity, two_year.total), ("5058", 50, Decimal("576810.00")))
+        outside_budget = await chat.reply("security", "4", "Бюджет до 450 тысяч рублей")
+        self.assertEqual(outside_budget.outcome, "clarify")
+        self.assertEqual(outside_budget.state.catalog_context.shown_offers, ())
+        self.assertFalse(outside_budget.recommendations)
+
+        sku = await chat.reply("security", "5", "Есть ли в наличии KL4869RAQDS?")
+        self.assertEqual([offer.offer_id for offer in sku.products], ["5058"])
+        self.assertIn("наличие по фиду от", sku.text)
+        self.assertFalse(sku.trace.calls)
+
+    async def test_card_fallback_requires_exact_sku_and_edition(self):
+        ask = "Какой язык интерфейса у EP2-07001?"
+        exact = await self.chat.reply("card", "1", ask)
+        self.assertIn("русская версия", exact.text)
+        self.assertEqual(exact.sources[-1].id, "softline-card-project-2024")
+        self.assertFalse(exact.trace.calls)
+
+        term = await self.chat.reply("card", "2", "Какой срок лицензии у EP2-07001?")
+        self.assertEqual(term.sources[-1].id, "ms-project-2024")
+        for wrong in ({"sku": "ANOTHER-SKU"}, {"edition": "Microsoft Project Standard 2024"}):
+            record = replace(OFFER_CARDS["473583"], **wrong)
+            with patch.dict(OFFER_CARDS, {"473583": record}):
+                result = await self.chat.reply("unmatched", str(wrong), ask)
+                self.assertEqual(result.outcome, "clarify")
+                self.assertNotIn("русская версия", result.text)
+
+    async def test_support_answers_follow_topic_and_escalate_only_when_needed(self):
+        chat = MockSupport(CommerceAgent(self.model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE),
+                                         catalog_index=self.index))
+        for key, query, evidence, follow_up in (
+            ("keys", "Откуда взять ключ после покупки?", "softline-lk-keys", "Зашёл в кабинет, ключа всё ещё нет"),
+            ("activation", "Софт выдаёт ошибку при активации", "softline-lk-activation-instructions", "Не помогло"),
+            ("returns", "Как мне вернуть деньги за лицензию?", "softline-store-return-instructions",
+             "Не удалось оформить возврат, проверьте мой заказ"),
+        ):
+            with self.subTest(topic=key):
+                first = await chat.reply(key, "1", query)
+                self.assertEqual(first.outcome, "answer")
+                self.assertEqual(first.sources[0].id, evidence)
+                handoff = await chat.reply(key, "2", follow_up)
+                self.assertEqual(handoff.outcome, "handoff")
+                self.assertEqual(handoff.handoff.reason, "support_follow_up")
+                self.assertEqual(handoff.sources[0].id, evidence)
+                self.assertEqual(len(handoff.handoff.history), 3)
+                self.assertFalse(first.trace.calls or handoff.trace.calls)
+
+        order = await chat.reply("order", "1", "Проверьте ключ по заказу №12345")
+        self.assertEqual(order.handoff.reason, "support_follow_up")
+        unrelated = "Как получить ключ для SSH?"
+        self.model.expect("other")
+        result = await chat.reply("activation", "3", unrelated)
+        self.assertEqual(result.outcome, "clarify")
+        self.assertFalse(result.sources)
+
+        await chat.reply("switch", "1", "Что делать, если не пришёл ключ?")
+        switched = await chat.reply("switch", "2", "Как вернуть деньги за лицензию?")
+        self.assertEqual(switched.outcome, "answer")
+        self.assertEqual(switched.sources[0].url, "https://store.softline.ru/delivery_info/")
+        new_product = await chat.reply("switch", "3", "Артикул EP2-07001")
+        self.assertEqual(new_product.products[0].offer_id, "473583")
+        self.assertIsNone(new_product.state.support_topic)
+
+    async def test_current_card_conflict_lists_two_observations_without_publishing_price(self):
+        record = OFFER_CARDS["473583"]
+        with patch.dict(OFFER_CARDS, {"473583": replace(record, price_rub=Decimal("180000"))}):
+            result = await self.chat.reply("conflict", "1", "Сколько стоит EP2-07001?")
+        self.assertEqual(result.outcome, "handoff")
+        self.assertEqual(result.handoff.reason, "conflicting_sources")
+        self.assertIn("Цена EP2-07001", result.handoff.question)
+        self.assertIn("176639.00", result.handoff.question)
+        self.assertIn("180000.00", result.handoff.question)
+        self.assertEqual(result.handoff.catalog_context.shown_offers, ("473583",))
+        self.assertEqual({source.id for source in result.sources}, {
+            "softline-offer-473583", "softline-card-project-2024", "ms-project-2024",
+        })
+        self.assertFalse(result.products)
+        self.assertFalse(result.trace.calls)
+
+        stale = replace(record, source=replace(record.source, version="2026-11-20"), price_rub=Decimal("180000"))
+        with patch.dict(OFFER_CARDS, {"473583": stale}):
+            result = await self.chat.reply("old-card", "1", "Сколько стоит EP2-07001?")
+        self.assertIn("176639.00 RUB", result.text)
+        self.assertEqual(result.outcome, "answer")
+
+        lookup = self.index.by_reference
+
+        def missing_feed(reference):
+            return tuple(replace(item, price=None, available=None) for item in lookup(reference))
+
+        card_only = replace(record, price_rub=Decimal("180000"), available=True)
+        with patch.dict(OFFER_CARDS, {"473583": card_only}), patch.object(self.index, "by_reference", missing_feed):
+            for phrase in ("Сколько стоит EP2-07001?", "Есть ли в наличии EP2-07001?"):
+                missing = await self.chat.reply("missing-feed", phrase, phrase)
+                self.assertEqual(missing.outcome, "clarify")
+                self.assertFalse(missing.products)
+                self.assertIn("В фиде нет данных", missing.text)
+
+    def test_bridge_exposes_card_facts_and_manager_dispute(self):
+        bridge = CommerceBridge(self.index_path, self.model)
+        chat = uuid4()
+        turn = ClaimedTurn(uuid4(), chat, 1, "Нужно планирование проектов на 2 ПК с Windows 11", 1)
+        reply = bridge.reply(turn, [], None)
+        card, = reply.products
+        facts = {fact.field: fact for fact in card.verified_facts}
+        self.assertEqual(facts["edition"].value, "Professional 2024")
+        self.assertEqual(facts["package_size"].value, "1 ПК")
+        self.assertEqual(facts["license_quantity"].value, "2")
+        self.assertEqual(facts["total_price"].value, "353278.00 RUB")
+        self.assertIn("фид от", facts["total_price"].source.title)
+
+        record = OFFER_CARDS["473583"]
+        with patch.dict(OFFER_CARDS, {"473583": replace(record, available=False)}):
+            turn = ClaimedTurn(uuid4(), chat, 2, "Есть ли в наличии?", 1)
+            reply = bridge.reply(turn, [], reply.commerce_state)
+        self.assertEqual(reply.outcome, "handoff")
+        self.assertIn("Наличие EP2-07001", reply.handoff.requirements["Спорный факт"])
+        self.assertIn("473583", reply.handoff.candidate_ids)

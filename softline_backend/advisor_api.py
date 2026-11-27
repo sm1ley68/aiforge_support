@@ -18,6 +18,8 @@ OPERATOR_COOKIE = "softline_operator_session"
 OPERATOR_TTL = 3600
 TURN_WAIT = 12
 REQUIREMENT_LABELS = {
+    "Спорный факт": "Спорный факт",
+    "Что проверить": "Что проверить",
     "product": "Продукт", "edition": "Редакция", "users": "Пользователи", "nodes": "Узлы",
     "term_months": "Срок, мес.", "goal": "Задача", "mail": "Почтовая система",
     "file_os": "ОС файлового сервера", "deployment": "Развёртывание", "budget_rub": "Бюджет, ₽",
@@ -123,7 +125,10 @@ def _product(card: dict, recommended: bool) -> dict:
     if card.get("price_amount") is not None and card.get("currency"):
         details.append(f"Цена по снимку — {card['price_amount']} {card['currency']}.")
     facts = {fact["field"]: fact["value"] for fact in card.get("verified_facts", [])}
-    for key, label in (("term", "Срок"), ("license_type", "Лицензия"), ("user_limit", "Лимит пользователей")):
+    for key, label in (
+        ("package_size", "Размер пакета"), ("license_quantity", "Число лицензий"), ("total_price", "Итого"),
+        ("term", "Срок"), ("license_type", "Лицензия"), ("user_limit", "Лимит пользователей"),
+    ):
         if key in facts:
             details.append(f"{label} — {facts[key]}.")
     product = {

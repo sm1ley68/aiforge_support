@@ -129,6 +129,20 @@ class CatalogContext:
     unverified_constraint: bool = False
 
 
+SupportTopic = Literal["keys", "activation", "returns"]
+
+
+@dataclass(frozen=True)
+class Recommendation:
+    offer_id: str
+    edition: str
+    package_size: str
+    quantity: int
+    total: Decimal
+    edition_source: Source
+    package_source: Source
+
+
 @dataclass(frozen=True)
 class State:
     cart: tuple[CartLine, ...] = ()
@@ -139,6 +153,7 @@ class State:
     last_quote: Document | None = None
     awaiting_price_confirmation: bool = False
     catalog_context: CatalogContext | None = None
+    support_topic: SupportTopic | None = None
 
 
 @dataclass(frozen=True)
@@ -195,3 +210,4 @@ class TurnResult:
     knowledge_update: KnowledgeUpdate | None = None
     trace: Trace | None = None
     products: tuple[CatalogOffer, ...] = ()
+    recommendations: tuple[Recommendation, ...] = ()

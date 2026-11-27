@@ -26,6 +26,7 @@ from .indexed_chat import (
 )
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
 from .routing import explicit_handoff_requested
+from .support_answers import SUPPORT_ANSWERS, support_request
 
 SPECIAL_CONDITION = re.compile(
     r"постоплат\w*|предоплат\w*|отсроч\w*|рассроч\w*|скид\w*|без\s+ндс|индивидуальн\w+\s+(?:цен\w*|услов\w*)",
@@ -238,13 +239,25 @@ class _Turn:
                 sources = ()
             return self.handoff("manager_requested", "Уточнить условия и проверить выбранные позиции.", sources)
 
+        topic, escalate = support_request(self.text, self.state.support_topic)
+        self.state = replace(self.state, support_topic=None)
+        eligible = self.agent.knowledge.eligible(self.now, None, self.customer_id)
+        support = eligible.get(SUPPORT_ANSWERS[topic].id) if topic else None
+        if escalate and topic is None:
+            return self.handoff("support_follow_up", "Проверить статус или состав заказа.")
+        if support is not None:
+            if escalate:
+                sources = expand_exceptions((support,), eligible, limit=5)
+                return self.handoff("support_follow_up", f"Проверить обращение по теме «{support.title.lower()}».", sources)
+            self.state = replace(self.state, support_topic=topic)
+            article = self.agent.knowledge.prefer_article(support, eligible)
+            return self.knowledge_answer(expand_exceptions((article,), eligible, limit=5))
         faq = self.agent.knowledge.match_faq(self.text, self.now, customer_id=self.customer_id)
         if faq:
             return self.knowledge_answer(faq)
         try:
-            sku = direct_sku(self.text)
-            if sku is not None:
-                patch = CatalogInput("named", product=sku)
+            if (sku := direct_sku(self.text)) is not None:
+                patch = sku
             elif (fact := context_fact(self.text)) is not None:
                 patch = CatalogInput("fact", fact=fact)
             elif context is not None and is_origin_follow_up(self.text):
@@ -271,7 +284,10 @@ class _Turn:
         except (DatabaseError, OSError):
             return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
         self.state = replace(self.state, catalog_context=decision.context)
-        return TurnResult(decision.outcome, decision.text, self.state, decision.sources, products=decision.products)
+        if decision.disputed_fact:
+            return self.handoff("conflicting_sources", decision.disputed_fact, decision.sources)
+        return TurnResult(decision.outcome, decision.text, self.state, decision.sources, products=decision.products,
+                          recommendations=decision.recommendations)
 
     def answer_order(self, order_id):
         if not order_id:
