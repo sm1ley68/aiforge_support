@@ -39,6 +39,49 @@ class CommercialTests(unittest.TestCase):
         self.assertTrue(read_terms(offer, html.replace(">120</span>", ">119</span>")).conflicting_price)
         self.assertIsNone(read_terms(offer, html.replace("Размер НДС (20%)", "Общие сведения об НДС")).vat_label)
 
+    def test_bulk_checkout_total_matches_unit_price_and_verified_quantity_range(self):
+        url = "https://store.softline.ru/novosoft/hbs10-339688/"
+        title = "Новософт Handy Backup (лицензии), стоимость 1 лицензии версии Standard"
+        offer = CatalogOffer(
+            "339688", "HBS10", None, None, title, None, url, "2026-11-27 22:26",
+            Decimal("3080"), "RUB", True, None, None, None, None, None, None,
+        )
+        html = f'''<script type="application/ld+json">{{
+          "@type":"Product","sku":"HBS10","name":"{title}",
+          "offers":{{"@type":"Offer","url":"{url}","price":"3080","priceCurrency":"RUB"}}
+        }}</script>
+        <div id="product_counter_wrapper" data-range-products='[
+          {{"minQuantity":4,"maxQuantity":9,"link":"/novosoft/hbs4-9-339687/"}},
+          {{"minQuantity":10,"maxQuantity":999,"link":"/novosoft/hbs10-339688/"}}
+        ]'>
+          <input name="product-amount" class="js-product-quantity" value="10">
+        </div>
+        <div class="b-checkout-modal__body">
+          <strong><span class="js-pay_in_one_click-price">30 800</span> ₽</strong>
+          <span>Полная стоимость</span><span>Размер НДС (22%)</span>
+        </div>'''
+        terms = read_terms(offer, html)
+        self.assertEqual((terms.price, terms.currency, terms.vat_label), (Decimal("3080"), "RUB", "НДС 22%"))
+        self.assertEqual(terms.quantity_range, (10, 999))
+        for invalid in (
+            html.replace("30 800", "30 900"),
+            html.replace('value="10"', 'value="9"'),
+            html.replace('name="product-amount"', 'name="unknown"'),
+        ):
+            self.assertTrue(read_terms(offer, invalid).conflicting_price)
+
+        bridge = CommerceBridge(Path("/unused"), CatalogModel("", ""), verify_site=True)
+        bridge.agent.catalog_index = SimpleNamespace(by_reference=lambda _ref: (offer,))
+        with patch("softline_backend.commerce_bridge.fetch_terms", return_value=terms):
+            turn = ClaimedTurn(uuid4(), uuid4(), 1, "КП на 10 лицензий, ID предложения 339688", 1)
+            result = bridge.reply(turn, [], None)
+            self.assertEqual(result.quote.total, Decimal("30800.00"))
+            self.assertEqual(result.quote.vat_label, "НДС 22%")
+            too_few = ClaimedTurn(uuid4(), uuid4(), 1, "КП на 9 лицензий, ID предложения 339688", 1)
+            result = bridge.reply(too_few, [], None)
+            self.assertEqual(result.outcome, "clarify")
+            self.assertIsNone(result.quote)
+
     def test_product_facts_require_the_same_sku_offer_and_edition(self):
         offer = CatalogOffer(
             "1001", "EXACT", None, None, "Редактор Professional 2024", None, URL, "2026-11-27 10:00",

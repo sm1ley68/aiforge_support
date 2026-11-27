@@ -247,6 +247,15 @@ class CommerceBridge:
                             candidate_ids=[card.offer_id], evidence=[source],
                         ),
                     )
+                if terms and terms.quantity_range is not None:
+                    minimum, maximum = terms.quantity_range
+                    if not minimum <= count <= maximum:
+                        return TurnResult(
+                            outcome="clarify",
+                            text=f"Цена этой позиции действует при количестве от {minimum} до {maximum}. "
+                                 "Укажите количество из этого диапазона или ID другого предложения.",
+                            commerce_state=persisted_state,
+                        )
                 price = (terms.price if terms and terms.price is not None else card.price_amount).quantize(
                     Decimal("0.01"), rounding=ROUND_HALF_UP,
                 )

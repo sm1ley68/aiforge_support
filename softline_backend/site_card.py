@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -24,6 +24,7 @@ class SiteTerms:
     currency: str | None = None
     vat_label: str | None = None
     conflicting_price: bool = False
+    quantity_range: tuple[int, int] | None = None
 
 
 def _card_path(url: str, offer_id: str) -> str | None:
@@ -71,7 +72,7 @@ def _exact_card(offer: CatalogOffer, document: str):
 
 def read_terms(offer: CatalogOffer, document: str) -> SiteTerms | None:
     matched = _exact_card(offer, document)
-    return _read_terms(*matched) if matched else None
+    return _read_terms(offer, *matched) if matched else None
 
 
 def _products(page, offer: CatalogOffer, path: str):
@@ -93,7 +94,31 @@ def _products(page, offer: CatalogOffer, path: str):
             yield product, item
 
 
-def _read_terms(page, products) -> SiteTerms | None:
+def _offer_quantity_range(counter, offer: CatalogOffer) -> tuple[int, int] | None:
+    try:
+        entries = json.loads(counter.get("data-range-products", "[]"))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    path = _card_path(offer.url, offer.offer_id)
+    ranges = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(link := entry.get("link"), str):
+            continue
+        try:
+            linked_url = urljoin(offer.url, link)
+        except ValueError:
+            continue
+        if _card_path(linked_url, offer.offer_id) != path:
+            continue
+        minimum, maximum = entry.get("minQuantity"), entry.get("maxQuantity")
+        if type(minimum) is int and type(maximum) is int and 1 <= minimum <= maximum:
+            ranges.add((minimum, maximum))
+    return next(iter(ranges)) if len(ranges) == 1 else None
+
+
+def _read_terms(offer: CatalogOffer, page, products) -> SiteTerms | None:
     prices = set()
     for _, item in products:
         amount = _price(item.get("price"))
@@ -107,7 +132,23 @@ def _read_terms(page, products) -> SiteTerms | None:
     bodies = page.find_class("b-checkout-modal__body")
     displayed = [_price(element.text_content().strip()) for body in bodies
                  for element in body.find_class("js-pay_in_one_click-price")]
-    if any(amount != price for amount in displayed):
+    quantity = 1
+    quantity_range = None
+    counters = page.xpath("//*[@id='product_counter_wrapper']")
+    if counters:
+        if len(counters) != 1:
+            return SiteTerms(conflicting_price=True)
+        counter, = counters
+        values = counter.xpath(".//input[@name='product-amount']/@value")
+        if len(values) != 1 or not re.fullmatch(r"[1-9][0-9]{0,4}", values[0]):
+            return SiteTerms(conflicting_price=True)
+        quantity = int(values[0])
+        quantity_range = _offer_quantity_range(counter, offer)
+        if quantity_range is None and quantity > 1:
+            quantity_range = (quantity, quantity)
+        if quantity_range is not None and not quantity_range[0] <= quantity <= quantity_range[1]:
+            return SiteTerms(conflicting_price=True)
+    if any(amount != price * quantity for amount in displayed):
         return SiteTerms(conflicting_price=True)
     vat_labels = set()
     for node in (*bodies, *page.find_class("b-product__buy-options-standard-features")):
@@ -117,7 +158,7 @@ def _read_terms(page, products) -> SiteTerms | None:
                 vat_labels.add(f"НДС {rate[1].replace('.', ',')}%")
             if re.fullmatch(r"(?:Цена )?без НДС", label, re.I):
                 vat_labels.add("Без НДС")
-    return SiteTerms(price, currency, vat_labels.pop() if len(vat_labels) == 1 else None)
+    return SiteTerms(price, currency, vat_labels.pop() if len(vat_labels) == 1 else None, quantity_range=quantity_range)
 
 
 _CARD_FIELDS = {
@@ -137,7 +178,7 @@ def read_card_evidence(offer: CatalogOffer, document: str) -> OfferCardEvidence 
         return None
     page, products = matched
 
-    terms = _read_terms(page, products)
+    terms = _read_terms(offer, page, products)
     values = {field: set() for field in _CARD_FIELDS.values()}
     stock = set()
     conflicts = set()
