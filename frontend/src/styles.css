@@ -783,3 +783,28 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid 
   .spinner { animation: none; }
   .issue-column:hover .issue-column-value, .issue-column:focus-visible .issue-column-value { transform: translateX(-50%); }
 }
+
+
+.demo-notice {
+  width: fit-content;
+  max-width: 100%;
+  padding: .35rem .7rem;
+  border: 1px solid #e2c586;
+  border-radius: .5rem;
+  background: #fff1d2;
+  color: #623c0a;
+  font-size: .8125rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.store-panel > .demo-notice {
+  flex: none;
+  width: 100%;
+  border-inline: 0;
+  border-top: 0;
+  border-radius: 0;
+  text-align: center;
+}
+
+.operator-route > .demo-notice { margin-bottom: .75rem; }

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { AppIcon } from './AppIcon';
+import { DemoNotice } from './DemoNotice';
 import { ApiError, api } from './softline-api';
 import { workspaceHref } from './use-operator-navigation';
 
@@ -28,6 +29,7 @@ export function OperatorLogin({ onSignedIn }: { onSignedIn: () => void }) {
     <section className="operator-login" aria-labelledby="operator-login-title">
       <AppIcon name="mark" size={28} />
       <h1 id="operator-login-title">Кабинет менеджера</h1>
+    <DemoNotice />
       <form className="operator-live-form" onSubmit={signIn}>
         <label>Токен доступа<input name="token" autoComplete="current-password" type="password" required /></label>
         <button className="operator-live-primary" disabled={busy} type="submit">{busy ? 'Входим…' : 'Войти'}</button>

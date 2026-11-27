@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import { AppIcon } from './AppIcon';
+import { DemoNotice } from './DemoNotice';
 import type { IconName } from './AppIcon';
 import { StoreRibbon } from './StoreRibbon';
 import { ApiError, api, chatPath, chatRequest, formatCatalogDate, formatPrice, json, safeLink, turnPath } from './softline-api';
@@ -234,6 +235,7 @@ export function LiveStoreAdvisor() {
           <div className="store-panel-heading"><h1 id="store-panel-title">Помощник Softline</h1><p>Подбор ПО и лицензий</p></div>
           <a className="store-manager-link" href={window.location.pathname} target="_blank" rel="noopener" aria-label="Кабинет менеджера">Кабинет менеджера <AppIcon name="external" size={13} /></a>
         </header>
+        <DemoNotice />
         {hasConversation ? (
           <div className="store-transcript" ref={transcript} role="log" aria-label="Переписка" tabIndex={0}>
             {chat.loading && <p className="store-pending" role="status">Загружаем переписку…</p>}

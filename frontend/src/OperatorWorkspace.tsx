@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { AgentTestDialog } from './AgentTestDialog';
 import { AppIcon } from './AppIcon';
+import { DemoNotice } from './DemoNotice';
 import { JournalTable } from './JournalTable';
 import { OperatorLogin } from './OperatorLogin';
 import { OperatorRoutePane } from './OperatorRoutePane';
@@ -99,6 +100,7 @@ export function OperatorWorkspace() {
 
         <AnimatePresence initial={!isDashboard}>
           <OperatorRoutePane key={route.entryId} activeDesk={desk} scrollTop={route.scrollTop} moved={route.moved}>
+            <DemoNotice />
             {isDashboard ? (
               <QueueDashboard
                 requests={requests}
