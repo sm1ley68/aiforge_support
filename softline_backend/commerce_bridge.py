@@ -24,6 +24,7 @@ from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
 from .contracts import HandoffDetails, MessageView, ProductCard, QuoteSnapshot, Source, TurnResult, VerifiedFact
 from .knowledge import validated_url
+from .local_catalog_model import DEFAULT_URL, LOCAL_TIMEOUT_SECONDS, LocalCatalogModel
 from .polza_egress import (
     ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, load_egress_filter, polza_scope, prepare, record,
 )
@@ -180,8 +181,10 @@ def _requirements(context: CatalogContext | None) -> dict[str, str]:
 
 class CommerceBridge:
     def __init__(self, index_path: Path, model: IntentModel):
+        local = isinstance(model, LocalCatalogModel)
         self.agent = CommerceAgent(
-            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path), model_timeout=6
+            model, knowledge=KnowledgeBase(CATALOG_KNOWLEDGE), catalog_index=SoftlineCatalog(index_path),
+            model_timeout=LOCAL_TIMEOUT_SECONDS if local else 6,
         )
 
     def restore_knowledge(self, publications: list[tuple[str, str, str]]) -> None:
@@ -317,13 +320,20 @@ def commerce_from_env() -> CommerceBridge | None:
     path = os.getenv("COMMERCE_CATALOG_INDEX_PATH", "").strip()
     if not path:
         return None
+    profile = os.getenv("COMMERCE_MODEL_PROFILE", "haiku").strip() or "haiku"
+    if profile == "ollama":
+        return CommerceBridge(Path(path), LocalCatalogModel(os.getenv("COMMERCE_OLLAMA_URL") or DEFAULT_URL))
+    if profile not in {"haiku", "offline"}:
+        raise ValueError("COMMERCE_MODEL_PROFILE must be haiku, ollama or offline")
     key = commerce_provider_key()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     enabled, checker = load_egress_filter()
-    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled, checker=checker))
+    return CommerceBridge(Path(path), CatalogModel(key, model, enabled=enabled and profile == "haiku", checker=checker))
 
 
 def commerce_egress_configured() -> bool:
+    if (os.getenv("COMMERCE_MODEL_PROFILE", "haiku").strip() or "haiku") != "haiku":
+        return False
     enabled, checker = load_egress_filter()
     model = os.getenv("POLZA_TASK_MODEL", "").strip() or os.getenv("LLM_MODEL", "").strip() or DEFAULT_MODEL
     endpoint = os.getenv("LLM_BASE_URL", DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"

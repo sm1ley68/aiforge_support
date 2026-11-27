@@ -8,9 +8,10 @@ from .contracts import TemporaryReadError, Usage
 class OllamaIntentModel:
     """Structured inference via an Ollama server configured by the worker."""
 
-    def __init__(self, client: httpx.AsyncClient, model: str):
+    def __init__(self, client: httpx.AsyncClient, model: str, *, storefront: bool = False):
         self.client = client
         self.model = model
+        self.storefront = storefront
 
     async def complete(self, system: str, ticket_text: str, schema: dict) -> tuple[dict, Usage]:
         try:
@@ -24,8 +25,13 @@ class OllamaIntentModel:
                     ],
                     "format": schema,
                     "stream": False,
-                    "options": {"temperature": 0},
+                    "options": {
+                        "temperature": 0, **({"num_ctx": 2048, "num_predict": 384, "seed": 42}
+                                             if self.storefront else {}),
+                    },
+                    **({"think": False} if self.storefront else {}),
                 },
+                follow_redirects=False,
             )
         except httpx.RequestError:
             raise TemporaryReadError from None
@@ -35,6 +41,8 @@ class OllamaIntentModel:
             raise ValueError("Ollama rejected structured inference")
         try:
             body = response.json()
+            if self.storefront and (body.get("done") is not True or body.get("done_reason") != "stop"):
+                raise ValueError("Incomplete Ollama response")
             payload = json.loads(body["message"]["content"])
             input_tokens = body["prompt_eval_count"]
             output_tokens = body["eval_count"]

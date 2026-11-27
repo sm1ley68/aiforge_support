@@ -167,11 +167,11 @@ class PreparedPrompt:
     platform: str | None
     mail: str | None
 
-    def validate_answer(self, result: dict) -> dict:
+    def validate_answer(self, result: dict, *, reject=block) -> dict:
         if not isinstance(result, dict) or result.keys() != RESPONSE_FIELDS:
-            block("response_fields")
+            reject("response_fields")
         if result["action"] not in ("need", "continue", "other"):
-            block("response_action")
+            reject("response_action")
         allowed = {
             "fact": None, "product": None, "edition": None,
             "goal": self.goal, "mail": self.mail, "file_os": self.platform,
@@ -181,49 +181,49 @@ class PreparedPrompt:
             if value is not None and (
                 not isinstance(value, str) or expected is None or value.casefold() != expected.casefold()
             ):
-                block(f"response_{key}")
+                reject(f"response_{key}")
         if result["action"] == "need" and result["goal"] is None:
-            block("response_goal_missing")
+            reject("response_goal_missing")
         return result
 
 
-async def prepare(model_input: str, checker: LocalFilter) -> PreparedPrompt:
+async def prepare(model_input: str, checker: LocalFilter, *, reject=block) -> PreparedPrompt:
     scope = polza_scope.get()
     if scope is None:
-        block("missing_turn_scope")
+        reject("missing_turn_scope")
     try:
         candidate = json.loads(model_input)
     except (TypeError, ValueError, RecursionError):
-        block("invalid_candidate")
+        reject("invalid_candidate")
     if (
         not isinstance(candidate, dict) or candidate.keys() != {"message", "selection"}
         or not isinstance(candidate["message"], str) or candidate["message"] != scope.message.strip()
         or (candidate["selection"] is not None and not isinstance(candidate["selection"], dict))
     ):
-        block("invalid_candidate")
+        reject("invalid_candidate")
     scope = replace(scope, selection=candidate["selection"])
     if _has_sensitive((scope.message, scope.history, scope.stored_state, scope.selection)):
-        block("sensitive_scope")
+        reject("sensitive_scope")
     try:
         async with asyncio.timeout(FILTER_TIMEOUT_SECONDS):
             checked = await checker(scope)
         decision = FilterDecision.model_validate(checked)
     except TimeoutError:
-        block("filter_timeout")
+        reject("filter_timeout")
     except ValidationError:
-        block("invalid_filter_result")
+        reject("invalid_filter_result")
     except Exception:
-        block("filter_error")
+        reject("filter_error")
     if decision.decision == "block":
-        block("filter_blocked")
+        reject("filter_blocked")
     if decision.decision == "uncertain":
-        block("filter_uncertain")
+        reject("filter_uncertain")
     if decision.fields is None:
-        block("missing_technical_fields")
+        reject("missing_technical_fields")
 
     fields = decision.fields
     if not any(fields.model_dump(exclude_none=True).values()):
-        block("missing_technical_fields")
+        reject("missing_technical_fields")
     goal = TASKS.get(fields.task)
     platform = PLATFORMS.get(fields.platform)
     mail = MAIL_SYSTEMS.get(fields.mail)

@@ -58,6 +58,8 @@ def check_turn(turn, step):
     if "skus" in step and skus != set(step["skus"]):
         failures.append("returned SKUs differ from the case")
     offer_ids = {card["offer_id"] for card in turn["products"]}
+    if "offer_ids_exact" in step and offer_ids != set(step["offer_ids_exact"]):
+        failures.append("returned offer IDs differ from the case")
     if not set(step.get("offer_ids_contain", ())).issubset(offer_ids):
         failures.append("an expected offer ID was not returned")
     if skus.intersection(step.get("excluded_skus", ())):
@@ -70,6 +72,27 @@ def check_turn(turn, step):
     if any(value.casefold() not in (turn["text"] or "").casefold() for value in step.get("text_contains", ())):
         failures.append("an expected fact is missing from the response")
     return failures
+
+
+def compare_dimensions(turn, step):
+    subsets = {
+        "sku": {"skus", "offer_ids_exact", "offer_ids_contain", "excluded_skus"},
+        "grounding": {"sources", "source_urls", "text_contains"},
+        "clarification": {"outcomes", "text_contains"},
+    }
+    scored = {}
+    for dimension, fields in subsets.items():
+        keys = fields & step.keys()
+        if not keys or (dimension == "grounding" and not {"sources", "source_urls"} & keys):
+            continue
+        if dimension == "clarification" and step.get("outcomes") != ["clarify"]:
+            continue
+        scored[dimension] = not check_turn(turn, {key: step[key] for key in keys})
+    if "outcomes" in step:
+        scored["handoff"] = turn["status"] == "succeeded" and (
+            (turn["outcome"] == "handoff") == bool(step.get("manager"))
+        )
+    return scored
 
 
 def run_case(base_url, case, manager_token, timeout):
@@ -88,6 +111,7 @@ def run_case(base_url, case, manager_token, timeout):
             turn = wait_for_turn(base_url, chat_path, turn_id, token, timeout)
             elapsed_ms = round(1000 * (time.monotonic() - started))
             failures = check_turn(turn, step)
+            scores = compare_dimensions(turn, step)
             if step.get("repeat"):
                 repeated = request(
                     base_url, f"{chat_path}/messages", method="POST", payload=payload, token=token, expected=202
@@ -95,14 +119,18 @@ def run_case(base_url, case, manager_token, timeout):
                 if repeated["turn_id"] != turn_id:
                     failures.append("repeated submission created a new turn")
             if step.get("manager"):
+                if not scores.get("handoff") or not manager_token:
+                    scores["handoff"] = False
                 if not manager_token:
                     failures.append("manager token was not configured for this case")
-                else:
+                elif scores["handoff"]:
                     detail = request(base_url, f"/manager/handoffs/{turn_id}", token=manager_token)
                     queue = request(base_url, "/manager/handoffs?limit=100", token=manager_token)
                     if detail["chat_id"] != chat["chat_id"] or not detail["messages"]:
+                        scores["handoff"] = False
                         failures.append("manager case is missing chat history")
                     if sum(item["handoff_id"] == turn_id for item in queue) != 1:
+                        scores["handoff"] = False
                         failures.append("manager queue does not contain exactly one case for the turn")
             results.append({
                 "step": number,
@@ -110,9 +138,12 @@ def run_case(base_url, case, manager_token, timeout):
                 "outcome": turn["outcome"],
                 "elapsed_ms": elapsed_ms,
                 "failures": failures,
+                "checks": scores,
             })
         except (TimeoutError, RuntimeError, OSError) as exc:
-            results.append({"step": number, "outcome": None, "failures": [type(exc).__name__], "error": str(exc)})
+            scores = compare_dimensions({"status": "failed", "outcome": None, "products": [], "sources": []}, step)
+            results.append({"step": number, "outcome": None, "failures": [type(exc).__name__],
+                            "error": str(exc), "checks": scores})
     return {"case": case["id"], "turns": results}
 
 

@@ -1,0 +1,30 @@
+services:
+  ollama:
+    image: ollama/ollama:0.12.10
+    environment:
+      OLLAMA_NO_CLOUD: "1"
+      OLLAMA_CONTEXT_LENGTH: "2048"
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [model]
+
+  worker:
+    environment:
+      COMMERCE_MODEL_PROFILE: ollama
+      COMMERCE_OLLAMA_URL: http://ollama:11434
+      POLZA_EGRESS_MODE: disabled
+    networks: [default, model]
+    depends_on:
+      api:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+networks:
+  model:
+    internal: true
+
+volumes:
+  ollama-models:
