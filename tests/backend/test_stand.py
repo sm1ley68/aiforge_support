@@ -99,7 +99,7 @@ class StandDatabaseTests(unittest.TestCase):
             self.assertEqual(ready.json()["catalog"], "ready")
 
         with self.store._connect() as db:
-            db.execute("DROP TABLE chat_turns")
+            db.execute("DROP TABLE chat_turns CASCADE")
         self.assertEqual(self.ready().json()["database"], "unavailable")
 
     def test_existing_turns_survive_the_retry_schema_upgrade(self):

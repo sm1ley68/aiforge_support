@@ -74,6 +74,20 @@ class HandoffDetails(BaseModel):
     evidence: list[Source] = Field(default_factory=list)
 
 
+class QuoteSnapshot(BaseModel):
+    offer_id: str
+    sku: str | None = None
+    title: str
+    quantity: int = Field(ge=1, le=10000)
+    unit_label: Literal["уп.", "лиц.", "ПК", "узел"]
+    unit_price: Decimal
+    total: Decimal
+    currency: str
+    catalog_snapshot_at: datetime
+    issued_at: datetime
+    source: Source
+
+
 class TurnResult(BaseModel):
     outcome: Literal["answer", "clarify", "recommend", "handoff"]
     text: str
@@ -82,6 +96,7 @@ class TurnResult(BaseModel):
     handoff: HandoffDetails | None = None
     catalog_selection: CatalogReference | None = None
     commerce_state: dict[str, JsonValue] | None = None
+    quote: QuoteSnapshot | None = None
     knowledge_update: KnowledgeUpdate | None = Field(default=None, exclude=True)
 
     @model_validator(mode="after")
@@ -98,6 +113,7 @@ class TurnView(BaseModel):
     text: str | None = None
     products: list[ProductCard] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
+    quote: QuoteSnapshot | None = None
     error: str | None = None
 
 
@@ -105,6 +121,7 @@ class MessageView(BaseModel):
     turn_id: UUID
     role: Literal["user", "assistant"]
     text: str
+    author: Literal["manager"] | None = None
     catalog_references: list[CatalogReference] = Field(default_factory=list, exclude=True)
 
 

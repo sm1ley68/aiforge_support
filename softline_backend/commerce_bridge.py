@@ -3,8 +3,10 @@ import json
 import logging
 import os
 import re
+from sqlite3 import DatabaseError
 from dataclasses import fields
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from time import monotonic
 
@@ -16,15 +18,16 @@ from aisupport_ml.commerce.catalog import CatalogOffer, SoftlineCatalog
 from aisupport_ml.commerce.contracts import CatalogContext, Message, Recommendation, State
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.commerce.retrieval import KnowledgeBase
-from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE, desktop_evidence
+from aisupport_ml.commerce.softline_evidence import CATALOG_KNOWLEDGE, PACKAGES, desktop_evidence
 from aisupport_ml.contracts import IntentModel, TemporaryReadError
 from aisupport_ml.polza import DEFAULT_BASE_URL, DEFAULT_MODEL, PolzaIntentModel
 
-from .contracts import HandoffDetails, MessageView, ProductCard, Source, TurnResult, VerifiedFact
+from .contracts import HandoffDetails, MessageView, ProductCard, QuoteSnapshot, Source, TurnResult, VerifiedFact
 from .knowledge import validated_url
 from .polza_egress import (
     ENDPOINT, RESPONSE_FIELDS, SYSTEM, LocalFilter, TurnScope, block, load_egress_filter, polza_scope, prepare, record,
 )
+from .quotes import QUOTE_REQUEST
 from .store import ClaimedTurn
 
 
@@ -184,12 +187,73 @@ class CommerceBridge:
     def restore_knowledge(self, publications: list[tuple[str, str, str]]) -> None:
         self.agent.knowledge.restore_publications(publications, datetime.now(timezone.utc))
 
+    def quote(self, request: re.Match, context: CatalogContext | None, persisted_state: dict | None) -> TurnResult:
+        shown = context.shown_offers if context else ()
+        offer_id = request["offer_id"] or (shown[0] if len(shown) == 1 else None)
+        if not offer_id or not request["quantity"]:
+            return TurnResult(
+                outcome="clarify",
+                text="Укажите ID предложения и количество. Например: «КП на 2 упаковки, ID предложения 12345».",
+                commerce_state=persisted_state,
+            )
+        count = int(request["quantity"])
+        if not 1 <= count <= 10000:
+            return TurnResult(
+                outcome="clarify", text="Укажите количество от 1 до 10 000.", commerce_state=persisted_state,
+            )
+
+        try:
+            (offer,) = self.agent.catalog_index.by_reference(offer_id)
+        except (ValueError, DatabaseError, OSError):
+            offer = None
+        if offer is not None and offer.offer_id == offer_id:
+            card = _card(offer, recommendation=None)
+            unit = request["unit"].casefold()
+            desktop = desktop_evidence(offer)
+            per_desktop = desktop is not None
+            per_node = "по количеству узлов" in offer.title.casefold()
+            unit_label = None
+            if desktop is not None and unit == "пк" and (desktop.max_devices is None or count <= desktop.max_devices):
+                unit_label = "ПК"
+            elif per_node and unit.startswith("уз") and any(
+                package.sku == offer.vendor_code and package.min_nodes <= count <= package.max_nodes
+                for package in PACKAGES
+            ):
+                unit_label = "узел"
+            elif not per_desktop and not per_node:
+                if unit.startswith(("упаков", "комплект")):
+                    unit_label = "уп."
+                elif unit.startswith("лицензи") and offer.user_limit in (None, 1):
+                    unit_label = "лиц."
+            if card is not None and card.availability is True and card.price_amount and card.currency and unit_label:
+                price = card.price_amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                quote = QuoteSnapshot(
+                    offer_id=card.offer_id, sku=card.sku, title=card.title, quantity=count, unit_label=unit_label,
+                    unit_price=price, total=price * count, currency=card.currency,
+                    catalog_snapshot_at=card.snapshot_at, issued_at=datetime.now(timezone.utc),
+                    source=Source(title=card.title, url=card.url),
+                )
+                return TurnResult(
+                    outcome="answer", text=f"КП готово. Итого {quote.total:.2f} {quote.currency}.",
+                    products=[card], sources=[quote.source], quote=quote, commerce_state=persisted_state,
+                )
+        return TurnResult(
+            outcome="handoff", text="Передал запрос менеджеру для проверки цены, наличия или единицы лицензирования.",
+            commerce_state=persisted_state,
+            handoff=HandoffDetails(
+                reason="commercial_terms", summary="Проверить возможность выдать КП",
+                requirements={"quantity": str(count)}, candidate_ids=[offer_id],
+            ),
+        )
+
     def reply(
         self, turn: ClaimedTurn, history: list[MessageView], persisted_state: dict | None
     ) -> TurnResult:
         state = STATE.validate_python(persisted_state) if persisted_state is not None else State()
         messages = tuple(Message("customer" if entry.role == "user" else "agent", entry.text) for entry in history)
         text = turn.message_text
+        if match := QUOTE_REQUEST.fullmatch(text.strip()):
+            return self.quote(match, state.catalog_context, persisted_state)
         direct_id = OFFER_ID.fullmatch(text.strip())
         query = direct_id[1] if direct_id else text
         scope = TurnScope(str(turn.turn_id), text, tuple(message.text for message in history), persisted_state)

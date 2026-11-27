@@ -7,10 +7,14 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from pydantic import BaseModel, Field, HttpUrl, StringConstraints, field_validator
+
+from aisupport_ml.commerce.retrieval import normalize
+from aisupport_ml.privacy import mask_text
 from starlette.concurrency import run_in_threadpool
 
-from .store import ChatNotFound, ChatStore, MessageConflict
+from .knowledge import validated_url
+from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound
 
 
 logger = logging.getLogger(__name__)
@@ -61,6 +65,31 @@ class ConsultationInput(BaseModel):
         if value and "\x00" in value:
             raise ValueError("Null characters are not allowed")
         return value
+
+
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=300)]
+ReplyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+
+
+class ManagerReplyInput(BaseModel):
+    text: ReplyText
+    confirmed_quote_turn_id: UUID | None = Field(default=None, alias="confirmedQuoteTurnId")
+
+    @field_validator("text")
+    @classmethod
+    def reject_null_bytes(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("Null characters are not allowed")
+        return value
+
+
+class ManagerArticleInput(BaseModel):
+    question: ShortText
+    aliases: list[ShortText] = Field(default_factory=list, max_length=8)
+    answer: ReplyText
+    sku: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80, pattern=r"^[a-zA-Z0-9._/-]+$")] | None = None
+    source_url: HttpUrl = Field(alias="sourceUrl")
+    public_content_confirmed: Literal[True] = Field(alias="publicContentConfirmed")
 
 
 def _matches(candidate: str, expected: str | None) -> bool:
@@ -148,18 +177,22 @@ def _present(row: dict, conversation_id: str) -> dict:
     products = [_product(card, outcome == "recommend") for card in result.get("products", [])]
     return {
         "conversationId": conversation_id,
-        "messages": [{"role": message.role, "content": message.text} for message in row["messages"]],
+        "messages": [
+            {"role": message.role, "content": message.text, **({"author": message.author} if message.author else {})}
+            for message in row["messages"]
+        ],
         "reply": result.get("text", ""),
         "requirements": _requirements(result),
         "products": products,
         "sources": result.get("sources", []),
         "trace": [{"label": OUTCOMES[outcome], "detail": ""}] if outcome in OUTCOMES else [],
         "suggestedReplies": [],
+        **({"quote": result["quote"]} if result.get("quote") else {}),
     }
 
 
 def _operator_request(row: dict) -> dict:
-    result = row["result"] or {}
+    result = row["handoff_result"] or row["result"] or {}
     context = (result.get("commerce_state") or {}).get("catalog_context") or {}
     scenario = {"need": "discovery", "named": "known"}.get(context.get("mode"), "question")
     handoff = result.get("handoff")
@@ -168,9 +201,10 @@ def _operator_request(row: dict) -> dict:
         issue = {"label": ISSUES.get(handoff["reason"], "Ручная проверка"), "detail": handoff["summary"]}
     elif row["status"] == "failed":
         issue = {"label": "Ошибка обработки", "detail": "Перепроверьте последнее сообщение."}
-    status = "review" if issue else (
-        "resolved" if result.get("outcome") in {"answer", "recommend"} else "waiting"
-    )
+    if row["manager_replied_at"] is not None:
+        status = "resolved"
+    else:
+        status = "review" if issue else "resolved" if result.get("quote") or row["customer_resolved_at"] else "waiting"
     identifier = str(row["chat_id"])
     view = {
         "id": identifier,
@@ -179,8 +213,16 @@ def _operator_request(row: dict) -> dict:
         "updatedAt": row["updated_at"].isoformat(),
         "scenario": scenario,
         "status": status,
-        "response": _present(row, identifier),
+        "response": _present({**row, "result": result}, identifier),
     }
+    if handoff:
+        view["handoffId"] = str(row["handoff_id"])
+        if row["manager_replied_at"] is not None:
+            view["managerRepliedAt"] = row["manager_replied_at"].isoformat()
+        shown_ids = {product["offer_id"] for product in result.get("products", [])}
+        issue["checks"] = [
+            f"Позиция {candidate_id}" for candidate_id in handoff["candidate_ids"] if candidate_id not in shown_ids
+        ]
     if issue is not None:
         view["issue"] = issue
     return view
@@ -228,6 +270,24 @@ def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
             "message": "Turn is still processing", "conversationId": handle, "turnId": str(turn_id),
         }, headers={"Cache-Control": "no-store"})
 
+    @router.get("/consultation/{chat_id}/turns/{turn_id}")
+    def consultation_result(chat_id: UUID, turn_id: UUID, request: Request, response: Response):
+        headers = {"Cache-Control": "no-store"}
+        token = _bearer(request)
+        if not token:
+            raise HTTPException(401, "Chat token required", headers=headers)
+        try:
+            snapshot = store.consultation_snapshot(chat_id, token, turn_id)
+        except (ChatNotFound, TurnNotFound):
+            raise HTTPException(404, "Turn not found", headers=headers) from None
+        if snapshot["status"] != "succeeded":
+            raise HTTPException(409, "Turn is not complete", headers=headers)
+        response.headers.update(headers)
+        view = _present(snapshot, str(chat_id))
+        if "quote" in view:
+            view["quote"]["downloadUrl"] = f"/chats/{chat_id}/turns/{turn_id}/quote"
+        return view
+
     @router.post("/operator/session")
     def sign_in(request: Request, response: Response):
         if not manager_token or not _matches(_bearer(request), manager_token):
@@ -245,6 +305,53 @@ def advisor_router(store: ChatStore, manager_token: str | None) -> APIRouter:
         response.delete_cookie(OPERATOR_COOKIE, path="/api/requests", httponly=True, samesite="strict")
         response.headers["Cache-Control"] = "no-store"
         return {"authenticated": False}
+
+    def require_operator(request: Request, response: Response):
+        if not _has_operator_access(request, manager_token):
+            raise HTTPException(401, "Operator authentication required")
+        response.headers["Cache-Control"] = "no-store"
+
+    @router.post("/requests/{handoff_id}/reply")
+    def send_manager_reply(handoff_id: UUID, body: ManagerReplyInput, request: Request, response: Response):
+        require_operator(request, response)
+        try:
+            return store.reply_to_handoff(handoff_id, body.text, body.confirmed_quote_turn_id)
+        except TurnNotFound:
+            raise HTTPException(404, "Manager case not found") from None
+        except MessageConflict:
+            raise HTTPException(409, "Reply already saved or quote cannot be confirmed") from None
+
+    @router.post("/requests/{handoff_id}/knowledge")
+    def publish_manager_knowledge(handoff_id: UUID, body: ManagerArticleInput, request: Request, response: Response):
+        require_operator(request, response)
+        source_url = validated_url(str(body.source_url))
+        if not source_url or body.source_url.scheme != "https" or body.source_url.query or body.source_url.fragment:
+            raise HTTPException(422, "Use a public HTTPS source without query parameters or fragments")
+        if source_url.host not in {"docs.softline.com", "store.softline.ru"} or source_url.port != 443:
+            raise HTTPException(422, "Use an approved Softline source")
+        text_fields = (body.question, body.answer, *body.aliases)
+        search_keys = sorted({normalize(value) for value in [body.question, *body.aliases]} - {""})
+        if not search_keys or any("\x00" in value for value in text_fields):
+            raise HTTPException(422, "Invalid article content")
+        try:
+            has_sensitive = any(mask_text(value).categories for value in text_fields)
+        except Exception:
+            raise HTTPException(503, "Local publication check unavailable") from None
+        if has_sensitive:
+            raise HTTPException(422, "Article contains personal or restricted data")
+        article = {"question": body.question, "aliases": body.aliases, "answer": body.answer,
+                   "sku": body.sku, "sourceUrl": str(source_url)}
+        try:
+            return store.publish_manager_knowledge(handoff_id, article, search_keys)
+        except TurnNotFound:
+            raise HTTPException(404, "Save a manager reply first") from None
+        except MessageConflict:
+            raise HTTPException(409, "An article for this case is already published") from None
+
+    @router.get("/requests/metrics")
+    def metrics(request: Request, response: Response):
+        require_operator(request, response)
+        return store.operator_metrics()
 
     @router.get("/requests")
     def requests(request: Request, response: Response, limit: Annotated[int, Query(ge=1, le=50)] = 25):

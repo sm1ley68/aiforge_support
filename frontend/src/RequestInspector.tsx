@@ -26,6 +26,7 @@ function IssueCard({ issue }: { issue: NonNullable<OperatorRequest['issue']> }) 
       </div>
       <h3>{issue.label}</h3>
       <p>{issue.detail}</p>
+      {!!issue.checks?.length && <ul>{issue.checks.map(check => <li key={check}>{check}</li>)}</ul>}
     </article>
   );
 }

@@ -39,3 +39,30 @@ CREATE TABLE IF NOT EXISTS commerce_knowledge (
     source_version text NOT NULL,
     status text NOT NULL CHECK (status IN ('draft', 'published'))
 );
+
+ALTER TABLE chat_turns ADD COLUMN IF NOT EXISTS submitted_at timestamptz;
+
+CREATE TABLE IF NOT EXISTS manager_replies (
+    handoff_id uuid PRIMARY KEY REFERENCES chat_turns (turn_id),
+    after_sequence bigint NOT NULL REFERENCES chat_turns (sequence),
+    text text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS manager_replies_after_sequence ON manager_replies (after_sequence);
+
+CREATE TABLE IF NOT EXISTS manager_knowledge (
+    handoff_id uuid PRIMARY KEY REFERENCES manager_replies (handoff_id),
+    article jsonb NOT NULL,
+    search_keys text[] NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS manager_knowledge_search ON manager_knowledge USING gin (search_keys);
+
+ALTER TABLE manager_replies ADD COLUMN IF NOT EXISTS confirmed_quote_id uuid REFERENCES chat_turns (turn_id);
+CREATE UNIQUE INDEX IF NOT EXISTS manager_replies_confirmed_quote
+    ON manager_replies (confirmed_quote_id) WHERE confirmed_quote_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS customer_resolutions (
+    turn_id uuid PRIMARY KEY REFERENCES chat_turns (turn_id),
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);

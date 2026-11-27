@@ -7,13 +7,14 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 
 from .advisor_api import advisor_router
 from .commerce_bridge import commerce_egress_configured
 from .contracts import HandoffCase, HandoffView, MessageInput, MessageView, NewChat, TurnAccepted, TurnView
+from .quotes import render_quote
 from .readiness import ProviderStatus, catalog_status
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
 
@@ -137,7 +138,31 @@ def create_app(
             raise HTTPException(404, "Turn not found")
         return turn
 
-    @app.get("/chats/{chat_id}/messages", response_model=list[MessageView])
+    @app.get("/chats/{chat_id}/turns/{turn_id}/quote", response_class=HTMLResponse)
+    def download_quote(chat_id: UUID, turn_id: UUID, token: ChatToken):
+        try:
+            turn = store.get_turn(chat_id, token, turn_id)
+        except ChatNotFound:
+            raise HTTPException(404, "Quote not found") from None
+        if turn is None or turn.quote is None:
+            raise HTTPException(404, "Quote not found")
+        return HTMLResponse(render_quote(turn_id, turn.quote), headers={
+            "Cache-Control": "no-store",
+            "Content-Disposition": f'attachment; filename="quote-{turn_id}.html"',
+            "Content-Security-Policy": "default-src 'none'",
+        })
+
+    @app.post("/chats/{chat_id}/turns/{turn_id}/resolution", status_code=204)
+    def confirm_resolution(chat_id: UUID, turn_id: UUID, token: ChatToken):
+        try:
+            store.confirm_customer_resolution(chat_id, token, turn_id)
+        except (ChatNotFound, TurnNotFound):
+            raise HTTPException(404, "Turn not found") from None
+        except MessageConflict:
+            raise HTTPException(409, "Only an answer or recommendation can be confirmed") from None
+        return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
+    @app.get("/chats/{chat_id}/messages", response_model=list[MessageView], response_model_exclude_none=True)
     def list_messages(chat_id: UUID, token: ChatToken):
         try:
             return store.history(chat_id, token)

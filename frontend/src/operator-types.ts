@@ -13,6 +13,7 @@ export type RequestComparisonRow = {
 
 export type OperatorRequest = {
   id: string;
+  handoffId?: string;
   title: string;
   customer: string;
   updatedAt: string;

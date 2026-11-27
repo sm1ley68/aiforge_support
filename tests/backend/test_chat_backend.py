@@ -297,3 +297,75 @@ class ChatBackendTests(unittest.TestCase):
             self.assertIn("Частый вопрос", response["text"])
             self.assertNotIn("knowledge_update", response)
             self.assertEqual(self.store.published_knowledge(), publications)
+
+    def test_automatic_quote_uses_verified_available_offer_and_stores_price_snapshot(self):
+        from aisupport_ml.commerce.catalog import build_catalog
+        from softline_backend.commerce_bridge import commerce_from_env
+
+        with tempfile.TemporaryDirectory() as folder:
+            feed = Path(folder) / "catalog.xml"
+            index = Path(folder) / "catalog.sqlite3"
+
+            def rebuild(price):
+                feed.write_text(
+                    '<yml_catalog date="2026-11-27 13:00"><shop><offers>'
+                    f'<offer id="1001" available="true"><name>Тестовая лицензия</name>'
+                    f'<vendorCode>TEST1</vendorCode><url>https://store.softline.ru/test/1001/</url>'
+                    f'<price>{price}</price><currencyId>RUR</currencyId></offer>'
+                    '<offer id="1002" available="false"><name>Недоступная лицензия</name>'
+                    '<url>https://store.softline.ru/test/1002/</url><price>70</price>'
+                    '<currencyId>RUR</currencyId></offer></offers></shop></yml_catalog>', encoding="utf-8",
+                )
+                replacement = index.with_suffix(".new")
+                build_catalog(feed, replacement)
+                replacement.replace(index)
+
+            rebuild("123.45")
+            with patch.dict(os.environ, COMMERCE_CATALOG_INDEX_PATH=str(index), POLZA_API_KEY="", LLM_API_KEY=""):
+                responses = {}
+                for key, text in (
+                    ("available-quote", "КП на 2 упаковки, ID предложения 1001"),
+                    ("unavailable-quote", "КП на 2 упаковки, ID предложения 1002"),
+                ):
+                    response = self.submit(key, text)
+                    self.assertEqual(response.status_code, 202)
+                    responses[key] = f"{self.path}/turns/{response.json()['turn_id']}"
+                    self.assertTrue(process_one(self.store, commerce=commerce_from_env()))
+                rebuild("200.00")
+
+            quote_path = responses["available-quote"]
+            turn = self.client.get(quote_path, headers=self.headers).json()
+            self.assertEqual(turn["status"], "succeeded", turn)
+            self.assertIsNotNone(turn["quote"], turn)
+            self.assertEqual(turn["quote"]["total"], "246.90")
+            self.assertEqual(turn["quote"]["quantity"], 2)
+            self.assertEqual(turn["quote"]["currency"], "RUB")
+            self.assertEqual(self.client.get(quote_path + "/quote").status_code, 401)
+            document = self.client.get(quote_path + "/quote", headers=self.headers)
+            self.assertEqual(document.status_code, 200, document.text)
+            self.assertIn("attachment", document.headers["Content-Disposition"])
+            self.assertIn("246.90", document.text)
+            self.assertNotIn("400.00", document.text)
+            self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
+            self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
+            rejected = self.client.get(responses["unavailable-quote"], headers=self.headers).json()
+            self.assertEqual(rejected["outcome"], "handoff")
+            self.assertIsNone(rejected["quote"])
+            operator = {"Authorization": "Bearer manager-secret"}
+            with TestClient(create_app(self.store, manager_token="manager-secret")) as manager:
+                self.assertEqual(manager.post(f"/api/requests/{rejected['turn_id']}/reply", headers=operator, json={
+                    "text": "Подтверждаю ранее выданное КП.", "confirmedQuoteTurnId": turn["turn_id"],
+                }).status_code, 409)
+                handoff = self.submit("review-previous-quote", "Позовите менеджера").json()["turn_id"]
+                self.assertTrue(process_one(self.store))
+                case_id = handoff
+                summary_path = f"/api/requests/{case_id}/reply"
+                summary = manager.post(summary_path, headers=operator, json={
+                    "text": "Подтверждаю ранее выданное КП.",
+                    "confirmedQuoteTurnId": turn["turn_id"],
+                })
+                self.assertEqual(summary.status_code, 200, summary.text)
+                metrics = manager.get("/api/requests/metrics", headers=operator).json()
+            self.assertEqual(metrics["managerConfirmedQuotes"], 1)
+            self.assertEqual(metrics["automaticQuotes"], 0)
+            self.assertEqual(metrics["customerConfirmedAnswers"], 0)

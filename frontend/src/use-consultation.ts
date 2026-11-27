@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { createAgentClient } from '../agent-client.mjs';
+import { createAgentClient, newMessageId, type ConsultationAttempt } from '../agent-client.mjs';
 import { demoConversation, mockAgent } from '../mock-agent.mjs';
 import type { AgentResponse, Message, Scenario } from './agent-types';
 
@@ -32,6 +32,8 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [session, setSession] = useState(0);
+  const attemptRef = useRef<{ message: string; state: ConsultationAttempt } | null>(null);
+  const chatRef = useRef<ConsultationAttempt['chat']>(undefined);
   const activeRequest = useRef<AbortController | null>(null);
 
   useEffect(() => () => {
@@ -52,6 +54,12 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
     setError('');
     setPending(true);
 
+    const previous = attemptRef.current;
+    const attempt = previous?.message === message
+      ? previous.state
+      : { messageId: newMessageId(), chat: chatRef.current };
+    attemptRef.current = { message, state: attempt };
+
     try {
       const next = await client.send({
         conversationId: response.conversationId,
@@ -59,14 +67,18 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
         scenario,
         history: messages,
         catalogProductId: productId,
-      }, { signal: controller.signal });
+      }, { signal: controller.signal, attempt });
 
       if (controller.signal.aborted) return;
 
       const reply = next.reply || next.messages.findLast(item => item.role === 'assistant')?.content;
       if (!reply) throw new Error('Empty agent reply');
 
-      setConversation({ response: next, messages: [...pendingMessages, { role: 'assistant', content: reply }] });
+      attemptRef.current = null;
+      setConversation({
+        response: next,
+        messages: attempt.chat && next.messages.length ? next.messages : [...pendingMessages, { role: 'assistant', content: reply }],
+      });
     } catch {
       if (controller.signal.aborted) return;
 
@@ -75,6 +87,7 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
       setError('Ответ не загрузился. Отправьте сообщение ещё раз.');
     } finally {
       if (activeRequest.current === controller) {
+        chatRef.current = attempt.chat;
         activeRequest.current = null;
         setPending(false);
       }
@@ -84,6 +97,8 @@ export function useConsultation({ seedDemo = true }: { seedDemo?: boolean } = {}
   function reset(nextScenario: Scenario | null = null) {
     activeRequest.current?.abort();
     activeRequest.current = null;
+    attemptRef.current = null;
+    chatRef.current = undefined;
     setConversation({ response: empty, messages: empty.messages });
     setScenario(nextScenario);
     setProductId(undefined);

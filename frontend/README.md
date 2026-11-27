@@ -24,7 +24,9 @@ VITE_AGENT_REQUESTS_URL=/api/requests
 
 Журнал делает JSON GET по `VITE_AGENT_REQUESTS_URL`. Ответ должен быть массивом `OperatorRequest` из `src/operator-types.ts`. Поле `response` содержит снимок диалога и результатов в формате `AgentResponse`. Если URL журнала не указан, используются данные `src/operator-mocks.ts`.
 
-Окно «Тест агента» в боковой панели отправляет один JSON POST на сообщение по `VITE_AGENT_API_URL`:
+При `VITE_AGENT_API_URL=/api/consultation` окно «Тест агента» работает с очередью Softline. Клиент создаёт чат через `POST /chats` до первой отправки и использует полученный токен в заголовке `Authorization`. Повтор отправки использует тот же `client_message_id` в `POST /chats/{chat_id}/messages`. Пока `GET /chats/{chat_id}/turns/{turn_id}` возвращает `queued` или `processing`, окно показывает «В обработке». После `succeeded` клиент открывает результат через `GET /api/consultation/{chat_id}/turns/{turn_id}`.
+
+Для другого настроенного маршрута клиент сохраняет совместимый JSON POST:
 
 ```json
 {

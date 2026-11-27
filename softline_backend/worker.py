@@ -7,10 +7,14 @@ from time import monotonic, sleep
 
 from psycopg import OperationalError
 
+from aisupport_ml.commerce.retrieval import normalize
+from aisupport_ml.commerce.routing import explicit_handoff_requested
+
 from .catalog import catalog_reply
 from .commerce_bridge import CommerceBridge, commerce_from_env
-from .contracts import HandoffDetails, MessageView, TurnResult
+from .contracts import HandoffDetails, MessageView, Source, TurnResult
 from .product_questions import product_question_reply
+from .quotes import QUOTE_REQUEST
 from .store import ChatStore
 from .task_search import task_reply
 
@@ -71,6 +75,20 @@ def process_one(
             )
         else:
             result = reply(turn.message_text, history)
+        if (result.outcome in {"clarify", "handoff"}
+                and not explicit_handoff_requested(turn.message_text) and not QUOTE_REQUEST.fullmatch(turn.message_text.strip())):
+            if result.handoff is None or result.handoff.reason in {"insufficient_evidence", "provider_unavailable"}:
+                reference = next(
+                    (message.catalog_references[0] for message in reversed(history) if len(message.catalog_references) == 1),
+                    None,
+                )
+                query = normalize(turn.message_text)
+                article = store.match_manager_knowledge(query, reference.sku if reference else None)
+                if article is not None:
+                    result = TurnResult(
+                        outcome="answer", text=article["answer"], commerce_state=result.commerce_state,
+                        sources=[Source(title=article["question"], url=article["sourceUrl"])],
+                    )
     except Exception as exc:
         logger.warning("turn_error turn_id=%s error=%s", turn.turn_id, type(exc).__name__)
         saved = store.finish(turn, error="processing_failed")

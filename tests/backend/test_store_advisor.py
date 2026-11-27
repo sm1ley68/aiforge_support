@@ -1,6 +1,7 @@
 import os
 import unittest
 from threading import Event, Thread
+from time import sleep
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -81,3 +82,81 @@ class StoreAdvisorTests(unittest.TestCase):
         self.assertEqual(queue.headers["Cache-Control"], "no-store")
         self.client.delete("/api/operator/session")
         self.assertEqual(self.client.get("/api/requests").status_code, 401)
+
+    def test_advisor_reads_the_same_native_turn_after_repeated_submission(self):
+        chat = self.client.post("/chats").json()
+        headers = {"Authorization": f"Bearer {chat['chat_token']}"}
+        messages = f"/chats/{chat['chat_id']}/messages"
+        body = {"client_message_id": "stable-first", "text": "Позовите менеджера"}
+        first = self.client.post(messages, json=body, headers=headers)
+        repeated = self.client.post(messages, json=body, headers=headers)
+        self.assertEqual(first.status_code, 202, first.text)
+        self.assertEqual(first.json(), repeated.json())
+        turn_id = first.json()["turn_id"]
+        for _ in range(50):
+            turn = self.client.get(f"/chats/{chat['chat_id']}/turns/{turn_id}", headers=headers)
+            if turn.json()["status"] == "succeeded":
+                break
+            sleep(0.02)
+        self.assertEqual(turn.json()["status"], "succeeded")
+        path = f"/api/consultation/{chat['chat_id']}/turns/{turn_id}"
+        self.assertEqual(self.client.get(path).status_code, 401)
+        response = self.client.get(path, headers=headers)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(len(response.json()["messages"]), 2)
+        self.assertNotIn(chat["chat_token"], response.text)
+
+    def test_later_turn_keeps_saved_manager_handoff(self):
+        first = self.client.post("/api/consultation", json={"message": "Позовите менеджера"})
+        self.assertEqual(first.status_code, 200, first.text)
+        second = self.client.post("/api/consultation", json={
+            "conversationId": first.json()["conversationId"], "message": "Нужна защита почты",
+        })
+        self.assertEqual(second.status_code, 200, second.text)
+        self.assertNotEqual(second.json()["trace"][0]["label"], "Передано менеджеру")
+        headers = {"Authorization": "Bearer advisor-manager"}
+        handoff, = self.client.get("/manager/handoffs", headers=headers).json()
+        item, = self.client.get("/api/requests", headers=headers).json()
+        self.assertEqual(item["status"], "review")
+        self.assertEqual(item["handoffId"], handoff["handoff_id"])
+        self.assertEqual(item["issue"]["label"], "Попросили менеджера")
+        self.assertEqual(len(item["response"]["messages"]), 4)
+
+    def test_manager_reply_and_public_article_are_distinct_and_persistent(self):
+        client = self.client
+        initial = client.post("/api/consultation", json={"message": "Позовите менеджера"}).json()
+        chat_id, chat_token = initial["conversationId"].split(".")
+        operator = {"Authorization": "Bearer advisor-manager"}
+        headers = {"Authorization": f"Bearer {chat_token}"}
+        handoff, = client.get("/manager/handoffs", headers=operator).json()
+        url = f"/api/requests/{handoff['handoff_id']}"
+        reply = {"text": "Проверил обращение клиента. Это приватный ответ."}
+        self.assertEqual(client.post(url + "/reply", json=reply).status_code, 401)
+        sent = client.post(url + "/reply", json=reply, headers=operator)
+        self.assertEqual(sent.status_code, 200, sent.text)
+        self.assertEqual(client.post(url + "/reply", json=reply, headers=operator).json(), sent.json())
+        self.assertEqual(client.post(url + "/reply", json={"text": "Другое"}, headers=operator).status_code, 409)
+        history = client.get(f"/chats/{chat_id}/messages", headers=headers).json()
+        self.assertEqual(history[-1]["text"], reply["text"])
+        self.assertEqual(history[-1]["author"], "manager")
+
+        article = {
+            "question": "Как обновить список модулей",
+            "aliases": ["Как обновляется список модулей"],
+            "answer": "Откройте настройки и нажмите «Обновить список».",
+            "sourceUrl": "https://docs.softline.com/ru-ru/lk/fulfillment",
+            "publicContentConfirmed": True,
+        }
+        unsafe = {**article, "answer": "Свяжитесь с agent@example.org"}
+        self.assertEqual(client.post(url + "/knowledge", json=unsafe, headers=operator).status_code, 422)
+        published = client.post(url + "/knowledge", json=article, headers=operator)
+        self.assertEqual(published.status_code, 200, published.text)
+        self.assertEqual(client.post(url + "/knowledge", json=article, headers=operator).json(), published.json())
+        later = client.post("/api/consultation", json={"message": article["aliases"][0]})
+        self.assertEqual(later.status_code, 200, later.text)
+        self.assertEqual(later.json()["reply"], article["answer"])
+        self.assertNotIn(reply["text"], later.text)
+        self.assertEqual(later.json()["sources"][0]["url"], article["sourceUrl"])
+        metrics = client.get("/api/requests/metrics", headers=operator)
+        self.assertEqual(metrics.status_code, 200, metrics.text)
+        self.assertEqual(metrics.json()["managerAnswered"], 1)
