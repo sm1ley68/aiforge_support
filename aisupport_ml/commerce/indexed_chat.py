@@ -71,6 +71,7 @@ _DEMO_NAMED = re.compile(r"^(?:(?:нужен|интересует|сколько
 _WINDOWS_PRODUCT = re.compile(r"^(?:(?:нужен|интересует|ищу)\s+)?(Windows Server(?:\s+\d{4})?)[?.!]*$", re.I)
 _DEMO_GOAL = re.compile(r"^(?:не знаю[^.;?!]*, но\s+)?(?:хотим|надо|нужно)\s+(защитить почту и файлы)\b", re.I)
 _SECURITY_NEED = re.compile(r"(?<!не )\b(?:потребуется|необходимо)\s+(защитить почту и файлы)\b", re.I)
+_SECURITY_TASK = re.compile(r"(защита почты и файлов)[?.!]*", re.I)
 _EXCHANGE = re.compile(r"\b(?:Microsoft\s+)?Exchange(?:\s+(?:Online|Server(?:\s+\d{4})?))?\b", re.I)
 _FILE_SERVER = re.compile(r"\b(?:Windows(?:\s+(?:Server(?:\s+\d{4})?|\d{1,2}))?|Linux|macOS)\b", re.I)
 _BACKUP_GOAL = re.compile(
@@ -268,7 +269,7 @@ def fallback_input(text: str, context: CatalogContext | None) -> CatalogInput | 
     windows = _WINDOWS_PRODUCT.fullmatch(text)
     if windows:
         return CatalogInput("named", product=windows[1])
-    goal = _DEMO_GOAL.match(text) or _SECURITY_NEED.search(text)
+    goal = _DEMO_GOAL.match(text) or _SECURITY_NEED.search(text) or _SECURITY_TASK.fullmatch(text)
     if goal:
         return CatalogInput("need", goal=goal[1])
     platform = _FILE_SERVER.search(text)

@@ -235,6 +235,39 @@ class IndexedChatTests(unittest.IsolatedAsyncioTestCase):
         other = await chat.reply("different", "1", "Как автоматизировать выставление счетов?")
         self.assertEqual(other.handoff.reason, "extraction_unavailable")
 
+    async def test_open_ended_selection_offers_examples_before_handing_off(self):
+        class UnavailableModel:
+            async def complete(self, system, text, schema):
+                raise TemporaryReadError("offline")
+
+        chat = MockSupport(CommerceAgent(UnavailableModel(), knowledge=KnowledgeBase([]), catalog_index=self.index))
+        choices = (
+            ("Защита почты и файлов", "сколько"),
+            ("Резервное копирование", "файлы"),
+            ("Редактирование PDF", "версия ОС"),
+            ("Планирование проектов", "версия ОС"),
+        )
+        for choice, expected_question in choices:
+            with self.subTest(choice=choice):
+                await chat.reply(choice, "1", "Хочу купить что-нибудь для бизнеса")
+                examples = await chat.reply(choice, "2", "Что-нибудь безопасное для бизнеса")
+                self.assertEqual(examples.outcome, "clarify")
+                self.assertIn(choice.casefold(), examples.text.casefold())
+                selected = await chat.reply(choice, "3", choice)
+                self.assertEqual(selected.outcome, "clarify")
+                self.assertIn(expected_question.casefold(), selected.text.casefold())
+                self.assertEqual(selected.state.catalog_context.goal.casefold(), choice.casefold())
+
+        for _ in range(3):
+            self.model.expect("other")
+        await self.chat.reply("vague", "1", "Хочу купить что-нибудь для бизнеса")
+        examples = await self.chat.reply("vague", "2", "Нужно что-нибудь безопасное")
+        self.assertIn("резервное копирование", examples.text)
+        handed = await self.chat.reply("vague", "3", "Не знаю, что выбрать")
+        self.assertEqual(handed.handoff.reason, "insufficient_requirements")
+        self.assertEqual(handed.handoff.history[-2].text, examples.text)
+        self.assertEqual(handed.handoff.history[-1].text, "Не знаю, что выбрать")
+
     async def test_platform_requirement_does_not_become_a_product(self):
         self.model.expect("named", product="Windows")
         needs = await self.chat.reply("platform", "1", "Нужен антивирус для Windows")

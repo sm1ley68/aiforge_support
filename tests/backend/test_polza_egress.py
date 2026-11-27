@@ -5,12 +5,14 @@ import unittest
 from dataclasses import asdict
 from importlib.util import find_spec
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from uuid import uuid4
 from unittest.mock import patch
 
 import httpx
 
+from aisupport_ml.commerce.catalog import build_catalog
 from aisupport_ml.commerce.contracts import CatalogContext
 from aisupport_ml.commerce.indexed_chat import INDEXED_SCHEMA
 from aisupport_ml.contracts import TemporaryReadError
@@ -253,6 +255,49 @@ class EgressBridgeTests(unittest.TestCase):
             checked.assert_called_once_with(MESSAGE, history=(), selection=current)
             current["goal"] = "другая задача"
             self.assertEqual(_screen_with_ml(scope)["decision"], "uncertain")
+
+    def test_open_ended_shopping_clarifies_without_model_egress(self):
+        messages = (
+            "Хочу купить ПО для компов своих в свой супер крутой бизнес. "
+            "Мы работаем с правительством так что нужно чтобы ещё и безопасно было",
+            "Помогите выбрать что-нибудь для бизнеса",
+            "Ищем инструмент для работы с документами",
+            "Планируем заказать лицензии для отдела",
+        )
+        calls = []
+
+        async def block(scope):
+            calls.append(scope.message)
+            return {"decision": "block"}
+
+        def receive(_request):
+            self.fail("Open-ended requests must stay local after the filter blocks them")
+
+        fixture = Path(__file__).resolve().parents[2] / "fixtures/softline/advisor-acceptance.xml"
+        with TemporaryDirectory() as directory:
+            index = Path(directory) / "catalog.sqlite"
+            build_catalog(fixture, index)
+            for enabled in (False, True):
+                model = CatalogModel(
+                    "fake-key", "anthropic/claude-haiku-5.5", enabled=enabled, checker=block,
+                    transport=httpx.MockTransport(receive),
+                )
+                bridge = CommerceBridge(index, model)
+                for message in messages:
+                    with self.subTest(enabled=enabled, message=message):
+                        chat_id = uuid4()
+                        turn = ClaimedTurn(uuid4(), chat_id, 1, message, 1)
+                        result = bridge.reply(turn, [], None)
+                        self.assertEqual(result.outcome, "clarify")
+                        self.assertIn("Какую задачу", result.text)
+                        self.assertIsNone(result.handoff)
+
+                        turn = ClaimedTurn(uuid4(), chat_id, 2, "Нужно резервное копирование", 1)
+                        follow_up = bridge.reply(turn, [], result.commerce_state)
+                        self.assertEqual(follow_up.outcome, "clarify")
+                        self.assertEqual(follow_up.commerce_state["catalog_context"]["goal"], "резервное копирование")
+
+        self.assertEqual(calls, list(messages))
 
     def test_worker_guard_handoff_retains_original_only_in_local_case(self):
         outgoing = []

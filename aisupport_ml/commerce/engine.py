@@ -27,7 +27,7 @@ from .indexed_chat import (
 )
 from .offer_evidence import OfferCardEvidence
 from .retrieval import KnowledgeBase, expand_exceptions, fuzzy_candidates, normalize
-from .routing import explicit_handoff_requested
+from .routing import explicit_handoff_requested, requests_product_selection
 from .support_answers import SUPPORT_ANSWERS, support_request
 
 SPECIAL_CONDITION = re.compile(
@@ -57,6 +57,14 @@ CUSTOMER_ORDER_REFERENCE = re.compile(r"\b(?:мо[йяеию]|наш\w*|поку
 DECLINE = re.compile(r"\b(?:нет|не\s+соглас\w*|не\s+подходит|не\s+устраивает)\b", re.IGNORECASE)
 INDEXED_MANAGER_TERMS = re.compile(r"\b(?:постоплат\w*\s+\d+|(?:дайте|сделайте|нужна)\s+(?:нам\s+)?скидк\w*|"
                                   r"(?:подготовьте|сделайте|оформите)\s+(?:кп|коммерческое предложение))\b", re.I)
+SELECTION_QUESTION = (
+    "Какую задачу нужно решить? Если товар уже выбран, укажите его название или артикул."
+)
+SELECTION_EXAMPLES = (
+    "Что ближе к вашей задаче: защита почты и файлов, резервное копирование, "
+    "редактирование PDF или планирование проектов? "
+    "Если нужно что-то другое, опишите, что сотрудники хотят делать."
+)
 
 
 def effect_id(kind: str, conversation_id: str, message_id: str) -> str:
@@ -282,10 +290,18 @@ class _Turn:
                 patch = parse_catalog_input(raw, self.text)
         except (TemporaryReadError, ValueError, TimeoutError):
             patch = fallback_input(self.text, context)
-            if patch is None:
-                return self.handoff("extraction_unavailable", "Проверить запрос клиента и продолжить подбор.")
         except (DatabaseError, OSError):
             return self.handoff("catalog_unavailable", "Перепроверить запрос по актуальному каталогу.")
+        if patch is None or patch.action == "other":
+            previous = self.history[-2] if len(self.history) > 1 else None
+            if previous == Message("agent", SELECTION_QUESTION):
+                return self.clarification(SELECTION_EXAMPLES)
+            if previous == Message("agent", SELECTION_EXAMPLES):
+                return self.handoff("insufficient_requirements", "Уточнить задачу клиента и продолжить подбор.")
+            if requests_product_selection(self.text):
+                return self.clarification(SELECTION_QUESTION)
+            if patch is None:
+                return self.handoff("extraction_unavailable", "Проверить запрос клиента и продолжить подбор.")
         try:
             decision = await asyncio.to_thread(decide, index, context, patch, self.text, self.agent.card_lookup)
         except (DatabaseError, OSError):

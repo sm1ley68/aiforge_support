@@ -39,6 +39,12 @@ _NEED = re.compile(
     r"\b(?:хотим|хочу|нужно|надо)\s+(?:защитить|автоматизировать|настроить|резервировать)\b|"
     r"\b(?:нужно|ищем|ищу)\s+решение для\b"
 )
+_SHOPPING_REQUEST = re.compile(
+    r"\b(?:хочу|хотим|нужно|надо|планирую|планируем)\s+(?:купить|приобрести|заказать)\b"
+    r"|\bпомоги(?:те)?\s+(?:выбрать|найти)\b"
+    r"|\b(?:нуж(?:ен|на|но|ны)|ищ(?:у|ем))\s+(?:что[- ]нибудь|решени\w*|инструмент\w*|"
+    r"товар\w*|продукт\w*|лицензи\w*|софт\w*|программ\w*|по)\b"
+)
 _REFERENCE = re.compile(
     r"\b(?:верси[юяи]|редакци[юяи]|дистрибутив)\s+|"
     r"\bлицензи\w*\s+на\s+|\b(?:нужен|нужна|нужны|хочу купить|ищу)\s+(?!лицензи\w*\b)"
@@ -76,6 +82,12 @@ def _has_named_reference(text: str, matches_catalog: Callable[[str], bool]) -> b
 def explicit_handoff_requested(message: str) -> bool:
     text = _normalize(message)
     return not _NO_HANDOFF.search(text) and bool(_HANDOFF.search(text) or _SPECIAL.search(text))
+
+
+def requests_product_selection(message: str) -> bool:
+    """Recognize a purchase or selection request even without technical requirements."""
+    text = _normalize(message)
+    return bool(_NEED.search(text) or _SHOPPING_REQUEST.search(text))
 
 
 def choose_first_route(
