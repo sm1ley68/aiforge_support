@@ -1,0 +1,181 @@
+{
+  "dataset": "softline-storefront-acceptance-2026-11-27",
+  "case_count": 5,
+  "turn_count": 16,
+  "failed_turns": 4,
+  "p50_ms": 18,
+  "p95_ms": 3515,
+  "report_elapsed_ms": 7987,
+  "cases": [
+    {
+      "case": "named messaging transition",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 3515,
+          "failures": [
+            "an expected source URL is missing"
+          ],
+          "egress": [
+            "allowed:technical_fields",
+            "api_response:http_200"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "handoff",
+          "elapsed_ms": 24,
+          "failures": [
+            "outcome handoff is outside the expected set",
+            "an expected offer ID was not returned"
+          ],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        },
+        {
+          "step": 3,
+          "outcome": "handoff",
+          "elapsed_ms": 21,
+          "failures": [
+            "outcome handoff is outside the expected set",
+            "an expected offer ID was not returned"
+          ],
+          "egress": [
+            "blocked:filter_blocked"
+          ]
+        },
+        {
+          "step": 4,
+          "outcome": "clarify",
+          "elapsed_ms": 16,
+          "failures": [
+            "outcome clarify is outside the expected set",
+            "an expected offer ID was not returned",
+            "sources are missing"
+          ],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "known product and platform",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "answer",
+          "elapsed_ms": 1811,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "clarify",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "desktop budget limit",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "clarify",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "recommend",
+          "elapsed_ms": 34,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "clarify",
+          "elapsed_ms": 34,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 4,
+          "outcome": "handoff",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "store self service",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "answer",
+          "elapsed_ms": 14,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 2,
+          "outcome": "answer",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        },
+        {
+          "step": 3,
+          "outcome": "answer",
+          "elapsed_ms": 13,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    },
+    {
+      "case": "expanded security price tier",
+      "turns": [
+        {
+          "step": 1,
+          "outcome": "recommend",
+          "elapsed_ms": 2364,
+          "failures": [],
+          "egress": [
+            "allowed:technical_fields",
+            "api_response:http_200"
+          ]
+        },
+        {
+          "step": 2,
+          "outcome": "recommend",
+          "elapsed_ms": 60,
+          "failures": [],
+          "egress": []
+        }
+      ]
+    }
+  ],
+  "passed_cases": 4,
+  "provider_usage": {
+    "calls": 2,
+    "successful_calls": 2,
+    "calls_without_token_counts": 0,
+    "prompt_tokens": 1577,
+    "completion_tokens": 106,
+    "estimated_cost_rub": null
+  },
+  "mode": "live",
+  "manifest_sha256": "e2c972970877f402a6bffb9b431e6bafb8656d3082dc00889557eb7130b2fa7f"
+}
