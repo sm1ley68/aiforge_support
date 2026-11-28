@@ -353,6 +353,7 @@ class ChatBackendTests(unittest.TestCase):
                 responses = {}
                 for key, text in (
                     ("available-quote", "КП на 2 упаковки, ID предложения 1001"),
+                    ("sentence-quote", "КП на 2 лицензии. ID предложения 1001"),
                     ("unavailable-quote", "КП на 2 упаковки, ID предложения 1002"),
                     ("missing-item", "ID предложения 999999"),
                 ):
@@ -361,6 +362,11 @@ class ChatBackendTests(unittest.TestCase):
                     responses[key] = f"{self.path}/turns/{response.json()['turn_id']}"
                     self.assertTrue(process_one(self.store, commerce=commerce_from_env()))
                 rebuild("200.00")
+
+            sentence = self.client.get(responses["sentence-quote"], headers=self.headers).json()
+            self.assertEqual(sentence["outcome"], "answer", sentence)
+            self.assertEqual(sentence["quote"]["offer_id"], "1001")
+            self.assertEqual(sentence["quote"]["quantity"], 2)
 
             quote_path = responses["available-quote"]
             turn = self.client.get(quote_path, headers=self.headers).json()
