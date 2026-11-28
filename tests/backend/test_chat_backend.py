@@ -385,10 +385,11 @@ class ChatBackendTests(unittest.TestCase):
             document = self.client.get(quote_path + "/quote", headers=self.headers)
             self.assertEqual(document.status_code, 200, document.text)
             self.assertIn("attachment", document.headers["Content-Disposition"])
-            self.assertIn("246.90", document.text)
+            self.assertIn("246,90\u00a0₽", document.text)
+            self.assertIn("style-src 'sha256-", document.headers["Content-Security-Policy"])
             for value in buyer.values():
                 self.assertIn(value, document.text)
-            self.assertNotIn("400.00", document.text)
+            self.assertNotIn("400,00", document.text)
             self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
             self.assertEqual(self.client.post(quote_path + "/resolution", headers=self.headers).status_code, 204)
             rejected = self.client.get(responses["unavailable-quote"], headers=self.headers).json()

@@ -22,7 +22,7 @@ from .contracts import (
     HandoffCase, HandoffView, MessageInput, MessageView, NewChat, ProductCard,
     QuoteCustomer, QuoteSnapshot, TurnAccepted, TurnView,
 )
-from .quotes import render_quote
+from .quotes import QUOTE_CSP, render_quote
 from .readiness import ProviderStatus, catalog_status, commerce_snapshot_at
 from .store import ChatNotFound, ChatStore, MessageConflict, TurnNotFound, TurnRetryConflict
 from .support_hours import SupportHours
@@ -231,7 +231,7 @@ def create_app(
         return HTMLResponse(render_quote(turn_id, turn.quote), headers={
             "Cache-Control": "no-store",
             "Content-Disposition": f'attachment; filename="quote-{turn_id}.html"',
-            "Content-Security-Policy": "default-src 'none'",
+            "Content-Security-Policy": QUOTE_CSP,
         })
 
     @app.post("/chats/{chat_id}/turns/{turn_id}/resolution", status_code=204)
